@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class CustomerProfile {
   const CustomerProfile({
@@ -26,6 +27,15 @@ class CustomerProfile {
   final String location;
   final String? companyName;
   final String? gstNumber;
+
+  String get roleDisplayName => switch (customerType) {
+    'reseller' => 'Reseller / Retailer',
+    'epc' => 'EPC Contractor',
+    'distributor' => 'Authorized Distributor',
+    _ => 'End User / Consumer',
+  };
+
+  bool get isBusiness => customerType != 'end_user';
 
   factory CustomerProfile.fromJson(Map<String, dynamic> json) => CustomerProfile(
     id: json['id'] as String? ?? 'profile-${DateTime.now().millisecondsSinceEpoch}',
@@ -59,6 +69,9 @@ class CustomerProfileRepository {
   static bool _offlineBypass = false;
   static String? _customBaseUrl;
 
+  static const String _prefProfilePrefix = 'enertech_profile_';
+  static const String _prefOnboardingPrefix = 'enertech_onboarding_done_';
+
   static void setOfflineBypass(bool value) {
     _offlineBypass = value;
   }
@@ -83,67 +96,97 @@ class CustomerProfileRepository {
 
   String get baseUrl => _baseUrl ?? effectiveBaseUrl;
 
-  Future<CustomerProfile?> loadMine({bool allowOfflineFallback = true}) async {
-    if (_offlineBypass && _cachedProfile != null) {
-      return _cachedProfile;
+  /// Loads current user's profile.
+  /// Returns null if the user has NOT completed onboarding yet,
+  /// so that the onboarding role-selection screen is guaranteed to show.
+  Future<CustomerProfile?> loadMine({String? userUid}) async {
+    final uid = userUid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return null;
+
+    // 1. Check local SharedPreferences
+    final prefs = await SharedPreferences.getInstance();
+    final isDone = prefs.getBool('$_prefOnboardingPrefix$uid') ?? false;
+    final cachedJson = prefs.getString('$_prefProfilePrefix$uid');
+
+    if (cachedJson != null && cachedJson.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(cachedJson) as Map<String, dynamic>;
+        _cachedProfile = CustomerProfile.fromJson(decoded);
+      } catch (e) {
+        debugPrint('Error decoding local profile: $e');
+      }
     }
+
+    // 2. Try fetching from remote backend API if possible
     try {
       final value = await _request('GET');
-      if (value == null) return null;
-      _cachedProfile = CustomerProfile.fromJson(value as Map<String, dynamic>);
-      return _cachedProfile;
-    } catch (e) {
-      debugPrint('CustomerProfileRepository.loadMine network note: $e');
-      if (allowOfflineFallback) {
-        final user = FirebaseAuth.instance.currentUser;
-        if (user != null) {
-          if (_cachedProfile != null) return _cachedProfile;
-          final fallback = CustomerProfile(
-            id: user.uid,
-            customerType: 'end_user',
-            name: (user.displayName != null && user.displayName!.trim().isNotEmpty)
-                ? user.displayName!.trim()
-                : (user.email?.split('@').first ?? 'EnerTech Customer'),
-            mobileNumber: user.phoneNumber ?? '',
-            email: user.email ?? '',
-            location: 'India',
-          );
-          _cachedProfile = fallback;
-          return fallback;
-        }
+      if (value != null && value is Map<String, dynamic>) {
+        final remote = CustomerProfile.fromJson(value);
+        _cachedProfile = remote;
+        await prefs.setString('$_prefProfilePrefix$uid', jsonEncode(remote.toJson()));
+        await prefs.setBool('$_prefOnboardingPrefix$uid', true);
+        return remote;
       }
-      rethrow;
+    } catch (e) {
+      debugPrint('Backend profile fetch note (falling back to local cache): $e');
     }
+
+    // 3. If onboarding was completed locally, return the cached profile
+    if (isDone && _cachedProfile != null) {
+      return _cachedProfile;
+    }
+
+    // 4. If onboarding was never completed for this user, return null so onboarding screen opens!
+    return null;
   }
 
-  Future<CustomerProfile> save(Map<String, Object?> values) async {
+  /// Saves user's onboarding profile persistently in local SharedPreferences
+  /// and attempts to sync to the backend API.
+  Future<CustomerProfile> save(Map<String, Object?> values, {String? userUid}) async {
+    final user = FirebaseAuth.instance.currentUser;
+    final uid = userUid ?? user?.uid ?? 'profile-${DateTime.now().millisecondsSinceEpoch}';
+
+    final profile = CustomerProfile(
+      id: uid,
+      customerType: (values['customer_type'] as String?) ?? 'end_user',
+      name: (values['name'] as String?) ?? user?.displayName ?? 'Customer',
+      mobileNumber: (values['mobile_number'] as String?) ?? '',
+      email: (values['email'] as String?) ?? user?.email ?? '',
+      location: (values['location'] as String?) ?? '',
+      companyName: values['company_name'] as String?,
+      gstNumber: values['gst_number'] as String?,
+    );
+
+    _cachedProfile = profile;
+
+    // Save to SharedPreferences immediately (persistent across app restarts)
     try {
-      final value = await _request('PUT', body: values);
-      final profile = CustomerProfile.fromJson(value as Map<String, dynamic>);
-      _cachedProfile = profile;
-      return profile;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('$_prefProfilePrefix$uid', jsonEncode(profile.toJson()));
+      await prefs.setBool('$_prefOnboardingPrefix$uid', true);
     } catch (e) {
-      debugPrint('CustomerProfileRepository.save network note, saving locally: $e');
-      final user = FirebaseAuth.instance.currentUser;
-      final local = CustomerProfile(
-        id: user?.uid ?? 'profile-${DateTime.now().millisecondsSinceEpoch}',
-        customerType: (values['customer_type'] as String?) ?? 'end_user',
-        name: (values['name'] as String?) ?? user?.displayName ?? 'Customer',
-        mobileNumber: (values['mobile_number'] as String?) ?? '',
-        email: (values['email'] as String?) ?? user?.email ?? '',
-        location: (values['location'] as String?) ?? '',
-        companyName: values['company_name'] as String?,
-        gstNumber: values['gst_number'] as String?,
-      );
-      _cachedProfile = local;
-      return local;
+      debugPrint('Error writing to SharedPreferences: $e');
     }
+
+    // Non-blocking sync to backend API if available
+    try {
+      await _request('PUT', body: values);
+    } catch (e) {
+      debugPrint('CustomerProfileRepository.save network sync note (persisted locally): $e');
+    }
+
+    return profile;
+  }
+
+  /// Clears local profile cache on sign out
+  static void clearCache() {
+    _cachedProfile = null;
+    _offlineBypass = false;
   }
 
   Future<dynamic> _request(String method, {Map<String, Object?>? body}) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) throw const HttpException('Sign in to complete your customer profile.');
-    if (!user.emailVerified) throw const HttpException('Verify your email before completing your profile.');
+    if (user == null) throw const HttpException('Sign in to access your customer profile.');
     final base = Uri.tryParse(baseUrl);
     if (base == null || !base.hasScheme || !base.hasAuthority) {
       throw const HttpException('The customer platform API is not configured.');
@@ -152,19 +195,24 @@ class CustomerProfileRepository {
     final uri = root.resolve('customers/me');
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
     try {
-      final request = await (method == 'PUT' ? client.putUrl(uri) : client.getUrl(uri)).timeout(const Duration(seconds: 5));
+      final request = await (method == 'PUT' ? client.putUrl(uri) : client.getUrl(uri)).timeout(const Duration(seconds: 4));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${await user.getIdToken()}');
+      try {
+        final token = await user.getIdToken();
+        if (token != null) {
+          request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+        }
+      } catch (_) {}
       if (body != null) {
         request.headers.contentType = ContentType.json;
         request.write(jsonEncode(body));
       }
-      final response = await request.close().timeout(const Duration(seconds: 5));
-      final text = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 5));
+      final response = await request.close().timeout(const Duration(seconds: 4));
+      final text = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 4));
       final decoded = text.isEmpty ? null : jsonDecode(text);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final message = decoded is Map<String, dynamic> ? decoded['detail'] as String? : null;
-        throw HttpException(message ?? 'Profile could not be loaded (${response.statusCode}).');
+        throw HttpException(message ?? 'Profile error (${response.statusCode}).');
       }
       return decoded;
     } finally {

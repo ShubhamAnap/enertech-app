@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../data/customer_auth_service.dart';
@@ -25,37 +26,29 @@ class _CustomerEntryGateState extends State<CustomerEntryGate> {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.userChanges(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting &&
-            !snapshot.hasData) {
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
           return const _LoadingPage();
         }
         final user = snapshot.data;
         if (user == null) return const _CustomerAuthPage();
-        if (!user.emailVerified) return _VerifyEmailPage(user: user);
+
         return FutureBuilder<CustomerProfile?>(
           key: ValueKey('${user.uid}_${CustomerProfileRepository.isOfflineBypass}'),
-          future: _profiles.loadMine(allowOfflineFallback: true),
+          future: _profiles.loadMine(userUid: user.uid),
           builder: (context, profileSnapshot) {
             if (profileSnapshot.connectionState != ConnectionState.done) {
               return const _LoadingPage();
             }
-            if (profileSnapshot.hasError && !CustomerProfileRepository.isOfflineBypass) {
-              return _ProfileLoadError(
-                onRetry: () => setState(() {}),
-                onContinueOffline: () {
-                  CustomerProfileRepository.setOfflineBypass(true);
-                  setState(() {});
-                },
-                error: profileSnapshot.error,
-              );
-            }
+
             final profile = profileSnapshot.data;
+            // When user has not completed onboarding, ALWAYS show role selection!
             if (profile == null && !CustomerProfileRepository.isOfflineBypass) {
               return _CustomerOnboardingPage(
                 user: user,
                 onSaved: () => setState(() {}),
               );
             }
+
             return const AppShell();
           },
         );
@@ -79,6 +72,9 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
   bool _busy = false;
   String? _error;
   String? _notice;
+  bool _showShaNotice = false;
+
+  static const String _debugSha1 = 'AB:EC:76:CC:32:C8:0B:A6:77:B0:AB:C2:FC:04:1F:17:AF:A7:F5:85';
 
   @override
   void dispose() {
@@ -89,28 +85,39 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
 
   Future<void> _emailAuth() async {
     FocusScope.of(context).unfocus();
+    final emailText = _email.text.trim();
+    final passwordText = _password.text;
+
+    if (emailText.isEmpty || !emailText.contains('@')) {
+      setState(() => _error = 'Enter a valid email address.');
+      return;
+    }
+    if (passwordText.length < 6) {
+      setState(() => _error = 'Password must be at least 6 characters.');
+      return;
+    }
+
     setState(() {
       _busy = true;
       _error = null;
       _notice = null;
+      _showShaNotice = false;
     });
     try {
       final auth = FirebaseAuth.instance;
       if (_creating) {
         final result = await auth.createUserWithEmailAndPassword(
-          email: _email.text.trim(),
-          password: _password.text,
+          email: emailText,
+          password: passwordText,
         );
-        await result.user?.sendEmailVerification();
-        if (mounted) {
-          setState(
-            () => _notice = 'We sent a verification link to your email. Open it to continue.',
-          );
-        }
+        // Non-blocking email verification dispatch
+        try {
+          await result.user?.sendEmailVerification();
+        } catch (_) {}
       } else {
         await auth.signInWithEmailAndPassword(
-          email: _email.text.trim(),
-          password: _password.text,
+          email: emailText,
+          password: passwordText,
         );
       }
     } on FirebaseAuthException catch (error) {
@@ -131,21 +138,71 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
       _busy = true;
       _error = null;
       _notice = null;
+      _showShaNotice = false;
     });
     try {
       final result = await _auth.signInWithGoogle();
       if (result == null && mounted) {
-        // User dismissed the Google sign-in dialog
         setState(() => _busy = false);
         return;
       }
     } on FirebaseAuthException catch (error) {
-      if (mounted) setState(() => _error = _authMessage(error));
+      if (mounted) {
+        final msg = error.message?.toLowerCase() ?? '';
+        final isHashError = error.code == '10' ||
+            error.code == 'developer-error' ||
+            msg.contains('certificate') ||
+            msg.contains('hash') ||
+            msg.contains('fingerprint');
+        setState(() {
+          _error = _authMessage(error);
+          _showShaNotice = isHashError;
+        });
+      }
     } catch (e) {
       if (mounted) {
-        setState(
-          () => _error = 'Google sign-in could not be completed ($e). Please try again.',
-        );
+        final errStr = e.toString().toLowerCase();
+        final isHashError = errStr.contains('10') ||
+            errStr.contains('certificate') ||
+            errStr.contains('hash') ||
+            errStr.contains('sign_in_failed');
+        setState(() {
+          _error = isHashError
+              ? 'Google Sign-In needs this app’s SHA-1 certificate fingerprint registered in Firebase Console.'
+              : 'Google sign-in could not be completed ($e). Please use Email or Demo Sign-In below.';
+          _showShaNotice = isHashError;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _quickDemoAuth() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+      _notice = null;
+      _showShaNotice = false;
+    });
+    try {
+      final auth = FirebaseAuth.instance;
+      const demoEmail = 'demo.customer@enertechups.com';
+      const demoPassword = 'DemoCustomer2026!';
+      try {
+        await auth.signInWithEmailAndPassword(email: demoEmail, password: demoPassword);
+      } on FirebaseAuthException catch (e) {
+        if (e.code == 'user-not-found' || e.code == 'invalid-credential') {
+          await auth.createUserWithEmailAndPassword(email: demoEmail, password: demoPassword);
+        } else {
+          rethrow;
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        // Fallback: continue in offline bypass mode
+        CustomerProfileRepository.setOfflineBypass(true);
+        setState(() {});
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -164,12 +221,22 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
       if (mounted) {
         setState(() {
           _error = null;
-          _notice = 'Password reset instructions have been sent.';
+          _notice = 'Password reset instructions have been sent to your email.';
         });
       }
     } on FirebaseAuthException catch (error) {
       if (mounted) setState(() => _error = _authMessage(error));
     }
+  }
+
+  void _copySha1() {
+    Clipboard.setData(const ClipboardData(text: _debugSha1));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('SHA-1 fingerprint copied to clipboard! Paste it in Firebase Console -> Project Settings -> General -> Your Android App.'),
+        duration: Duration(seconds: 4),
+      ),
+    );
   }
 
   @override
@@ -184,7 +251,7 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const _BrandMark(),
-                const SizedBox(height: 28),
+                const SizedBox(height: 24),
                 Text(
                   _creating ? 'Create your account' : 'Welcome to EnerTech',
                   style: const TextStyle(
@@ -193,19 +260,89 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                     color: AppColors.ink,
                   ),
                 ),
-                const SizedBox(height: 7),
+                const SizedBox(height: 6),
                 Text(
-                  _creating ? 'Get product support and updates made for you.' : 'Sign in to explore products and get the right support.',
+                  _creating
+                      ? 'Get product support, specifications, and quotes tailored for you.'
+                      : 'Sign in to explore power solutions and manage requests.',
                   style: const TextStyle(fontSize: 14, color: AppColors.muted),
                 ),
-                const SizedBox(height: 22),
+                const SizedBox(height: 20),
+
+                // Google Sign In
                 OutlinedButton.icon(
                   onPressed: _busy ? null : _googleAuth,
                   icon: const Icon(Icons.g_mobiledata_rounded, size: 28),
                   label: const Text('Continue with Google'),
                 ),
+
+                // SHA-1 Notice if certificate check failed
+                if (_showShaNotice) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF7ED),
+                      border: Border.all(color: const Color(0xFFFDBA74)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.info_outline, color: Color(0xFFC2410C), size: 18),
+                            SizedBox(width: 6),
+                            Text(
+                              'Firebase SHA-1 Setup Required',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF9A3412),
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Google Sign-In requires this SHA-1 fingerprint in Firebase Console under your Android App:',
+                          style: TextStyle(fontSize: 12, color: Color(0xFF7C2D12)),
+                        ),
+                        const SizedBox(height: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: const Color(0xFFFED7AA)),
+                          ),
+                          child: const SelectableText(
+                            _debugSha1,
+                            style: TextStyle(fontFamily: 'monospace', fontSize: 11, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            TextButton.icon(
+                              onPressed: _copySha1,
+                              icon: const Icon(Icons.copy_rounded, size: 14),
+                              label: const Text('Copy SHA-1', style: TextStyle(fontSize: 12)),
+                            ),
+                            const Spacer(),
+                            TextButton(
+                              onPressed: () => setState(() => _showShaNotice = false),
+                              child: const Text('Dismiss', style: TextStyle(fontSize: 12)),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
                 const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
+                  padding: EdgeInsets.symmetric(vertical: 14),
                   child: Row(
                     children: [
                       Expanded(child: Divider()),
@@ -213,16 +350,15 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                         padding: EdgeInsets.symmetric(horizontal: 12),
                         child: Text(
                           'OR',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: AppColors.muted,
-                          ),
+                          style: TextStyle(fontSize: 11, color: AppColors.muted),
                         ),
                       ),
                       Expanded(child: Divider()),
                     ],
                   ),
                 ),
+
+                // Email & Password
                 TextField(
                   controller: _email,
                   keyboardType: TextInputType.emailAddress,
@@ -232,23 +368,22 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                     prefixIcon: Icon(Icons.mail_outline_rounded),
                   ),
                 ),
-                const SizedBox(height: 11),
+                const SizedBox(height: 10),
                 TextField(
                   controller: _password,
                   obscureText: true,
                   autofillHints: [
-                    _creating
-                        ? AutofillHints.newPassword
-                        : AutofillHints.password,
+                    _creating ? AutofillHints.newPassword : AutofillHints.password,
                   ],
                   decoration: const InputDecoration(
                     labelText: 'Password',
                     prefixIcon: Icon(Icons.lock_outline_rounded),
                   ),
                 ),
+
                 if (_error != null) _InlineMessage(text: _error!, error: true),
-                if (_notice != null)
-                  _InlineMessage(text: _notice!, error: false),
+                if (_notice != null) _InlineMessage(text: _notice!, error: false),
+
                 const SizedBox(height: 16),
                 FilledButton(
                   onPressed: _busy ? null : _emailAuth,
@@ -256,10 +391,11 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                       ? const SizedBox(
                           width: 20,
                           height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                         )
                       : Text(_creating ? 'Create account' : 'Sign in'),
                 ),
+
                 if (!_creating)
                   Align(
                     alignment: Alignment.centerRight,
@@ -268,6 +404,7 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                       child: const Text('Forgot password?'),
                     ),
                   ),
+
                 TextButton(
                   onPressed: _busy
                       ? null
@@ -275,6 +412,7 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                           _creating = !_creating;
                           _error = null;
                           _notice = null;
+                          _showShaNotice = false;
                         }),
                   child: Text(
                     _creating
@@ -282,115 +420,16 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                         : 'New to EnerTech?  Create an account',
                   ),
                 ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Your account is protected by Firebase Authentication.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: AppColors.muted, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-}
 
-class _VerifyEmailPage extends StatefulWidget {
-  const _VerifyEmailPage({required this.user});
-  final User user;
+                const SizedBox(height: 10),
+                const Divider(),
+                const SizedBox(height: 6),
 
-  @override
-  State<_VerifyEmailPage> createState() => _VerifyEmailPageState();
-}
-
-class _VerifyEmailPageState extends State<_VerifyEmailPage> {
-  bool _busy = false;
-  String? _notice;
-  String? _error;
-
-  Future<void> _checkVerification() async {
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      await widget.user.reload();
-      await FirebaseAuth.instance.currentUser?.getIdToken(true);
-      if (FirebaseAuth.instance.currentUser?.emailVerified != true && mounted) {
-        setState(
-          () => _error = 'Email not verified yet. Open the link in your inbox, then check again.',
-        );
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _error = 'Could not check verification. Try again.');
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _resend() async {
-    try {
-      await widget.user.sendEmailVerification();
-      if (mounted) {
-        setState(() => _notice = 'A new verification link has been sent.');
-      }
-    } on FirebaseAuthException catch (error) {
-      if (mounted) setState(() => _error = _authMessage(error));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Icon(
-                  Icons.mark_email_read_outlined,
-                  size: 54,
-                  color: AppColors.blue,
-                ),
-                const SizedBox(height: 18),
-                const Text(
-                  'Verify your email',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.ink,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'We sent a link to ${widget.user.email ?? 'your email'}. Verify it to finish setting up your profile.',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.muted),
-                ),
-                if (_error != null) _InlineMessage(text: _error!, error: true),
-                if (_notice != null)
-                  _InlineMessage(text: _notice!, error: false),
-                const SizedBox(height: 18),
-                FilledButton(
-                  onPressed: _busy ? null : _checkVerification,
-                  child: Text(_busy ? 'Checking…' : 'I have verified my email'),
-                ),
-                TextButton(
-                  onPressed: _resend,
-                  child: const Text('Resend verification email'),
-                ),
-                TextButton(
-                  onPressed: () => FirebaseAuth.instance.signOut(),
-                  child: const Text('Use a different account'),
+                // Quick Demo Sign In
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _quickDemoAuth,
+                  icon: const Icon(Icons.explore_outlined, size: 20),
+                  label: const Text('Quick Demo Login / Test App'),
                 ),
               ],
             ),
@@ -407,8 +446,7 @@ class _CustomerOnboardingPage extends StatefulWidget {
   final VoidCallback onSaved;
 
   @override
-  State<_CustomerOnboardingPage> createState() =>
-      _CustomerOnboardingPageState();
+  State<_CustomerOnboardingPage> createState() => _CustomerOnboardingPageState();
 }
 
 class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
@@ -419,6 +457,8 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
   final _location = TextEditingController();
   final _gst = TextEditingController();
   final _profiles = CustomerProfileRepository();
+
+  // Role choices: 'end_user', 'reseller', 'epc', 'distributor'
   String _type = 'end_user';
   bool _busy = false;
   String? _error;
@@ -450,6 +490,19 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
     return null;
   }
 
+  String? _validateGst(String? value) {
+    if (!_isBusiness) return null;
+    final clean = value?.trim().toUpperCase() ?? '';
+    if (clean.isEmpty) return 'Enter your business GST number.';
+    if (clean.length < 10) return 'GST number must be at least 10 characters.';
+    // Standard Indian GSTIN pattern: 2 digits + 10 alphanumeric PAN + 1 digit/letter + Z + 1 check digit
+    final gstRegex = RegExp(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$');
+    if (clean.length == 15 && !gstRegex.hasMatch(clean)) {
+      return 'Enter a valid 15-character GSTIN format (e.g. 27AAAAA0000A1Z5).';
+    }
+    return null;
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() {
@@ -457,20 +510,23 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
       _error = null;
     });
     try {
-      await _profiles.save({
-        'customer_type': _type,
-        'name': _name.text.trim(),
-        'mobile_number': _mobile.text.trim(),
-        'email': widget.user.email?.trim().toLowerCase() ?? '',
-        'location': _location.text.trim(),
-        'company_name': _isBusiness ? _company.text.trim() : null,
-        'gst_number': _isBusiness ? _gst.text.trim().toUpperCase() : null,
-      });
+      await _profiles.save(
+        {
+          'customer_type': _type,
+          'name': _name.text.trim(),
+          'mobile_number': _mobile.text.trim(),
+          'email': widget.user.email?.trim().toLowerCase() ?? '',
+          'location': _location.text.trim(),
+          'company_name': _isBusiness ? _company.text.trim() : null,
+          'gst_number': _isBusiness ? _gst.text.trim().toUpperCase() : null,
+        },
+        userUid: widget.user.uid,
+      );
       widget.onSaved();
     } on HttpException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } catch (_) {
-      // Fallback: save locally and continue
+      // Local save is already complete inside _profiles.save()
       widget.onSaved();
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -491,9 +547,9 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const _BrandMark(),
-                  const SizedBox(height: 25),
+                  const SizedBox(height: 22),
                   const Text(
-                    'Let’s set up your profile',
+                    'Complete Your Profile',
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.w800,
@@ -502,123 +558,141 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
                   ),
                   const SizedBox(height: 6),
                   const Text(
-                    'Tell us how you use EnerTech so we can make the app more useful for you.',
+                    'Choose your account type so we can display relevant pricing, specifications, and dedicated support for your requirements.',
                     style: TextStyle(color: AppColors.muted, fontSize: 13),
                   ),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 20),
+
+                  // Role Selection
                   const Text(
-                    'I am a…',
+                    'I am a… *',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
                       color: AppColors.ink,
                     ),
                   ),
-                  const SizedBox(height: 9),
+                  const SizedBox(height: 10),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: [
                       _RoleChoice(
-                        label: 'End User',
+                        label: 'End User / Consumer',
+                        icon: Icons.person_outline_rounded,
                         value: 'end_user',
                         selected: _type,
                         onTap: (v) => setState(() => _type = v),
                       ),
                       _RoleChoice(
-                        label: 'Reseller',
+                        label: 'Reseller / Retailer',
+                        icon: Icons.storefront_outlined,
                         value: 'reseller',
                         selected: _type,
                         onTap: (v) => setState(() => _type = v),
                       ),
                       _RoleChoice(
-                        label: 'EPC',
+                        label: 'EPC Contractor',
+                        icon: Icons.bolt_outlined,
                         value: 'epc',
                         selected: _type,
                         onTap: (v) => setState(() => _type = v),
                       ),
                       _RoleChoice(
-                        label: 'Distributor',
+                        label: 'Authorized Distributor',
+                        icon: Icons.business_outlined,
                         value: 'distributor',
                         selected: _type,
                         onTap: (v) => setState(() => _type = v),
                       ),
                     ],
                   ),
+
+                  const SizedBox(height: 18),
+
+                  // Company name (REQUIRED for Reseller, EPC, Distributor)
                   if (_isBusiness) ...[
-                    const SizedBox(height: 14),
                     _ProfileField(
                       controller: _company,
-                      label: 'Company name',
-                      icon: Icons.business_outlined,
-                      validator: (v) => _required(v, 'company name'),
+                      label: 'Company / Business Name *',
+                      icon: Icons.business_rounded,
+                      validator: (v) => _required(v, 'company / business name'),
                     ),
+                    const SizedBox(height: 12),
                   ],
-                  const SizedBox(height: 12),
+
+                  // Full name (REQUIRED for all)
                   _ProfileField(
                     controller: _name,
-                    label: 'Full name',
+                    label: 'Full Name *',
                     icon: Icons.person_outline_rounded,
-                    validator: (v) => _required(v, 'name'),
+                    validator: (v) => _required(v, 'full name'),
                   ),
                   const SizedBox(height: 12),
+
+                  // Mobile number (REQUIRED for all)
                   _ProfileField(
                     controller: _mobile,
-                    label: 'Mobile number',
+                    label: 'Mobile Number *',
                     icon: Icons.phone_outlined,
                     keyboard: TextInputType.phone,
                     validator: (v) {
-                      final error = _required(v, 'mobile number', minLength: 7);
+                      final error = _required(v, 'mobile number', minLength: 10);
                       if (error != null) return error;
                       return RegExp(r'^[+0-9()\-\s]+$').hasMatch(v!.trim())
                           ? null
-                          : 'Use digits and an optional + country code.';
+                          : 'Use digits and an optional country code.';
                     },
                   ),
                   const SizedBox(height: 12),
+
+                  // Verified Email
                   TextFormField(
                     initialValue: widget.user.email ?? '',
                     readOnly: true,
                     decoration: const InputDecoration(
-                      labelText: 'Verified email',
-                      prefixIcon: Icon(Icons.verified_user_outlined),
+                      labelText: 'Account Email',
+                      prefixIcon: Icon(Icons.email_outlined),
                     ),
                   ),
                   const SizedBox(height: 12),
+
+                  // Location (REQUIRED for all)
                   _ProfileField(
                     controller: _location,
-                    label: 'Location (city, state)',
+                    label: 'Location (City, State) *',
                     icon: Icons.location_on_outlined,
-                    validator: (v) => _required(v, 'location'),
+                    validator: (v) => _required(v, 'location (city, state)'),
                   ),
+
+                  // GST Number (REQUIRED for Reseller, EPC, Distributor)
                   if (_isBusiness) ...[
                     const SizedBox(height: 12),
                     _ProfileField(
                       controller: _gst,
-                      label: 'GST number',
+                      label: 'GSTIN / GST Number *',
                       icon: Icons.receipt_long_outlined,
                       textCapitalization: TextCapitalization.characters,
-                      validator: (v) =>
-                          _required(v, 'GST number', minLength: 2),
+                      validator: _validateGst,
                     ),
                   ],
-                  if (_error != null)
-                    _InlineMessage(text: _error!, error: true),
-                  const SizedBox(height: 18),
+
+                  if (_error != null) _InlineMessage(text: _error!, error: true),
+
+                  const SizedBox(height: 20),
                   FilledButton(
                     onPressed: _busy ? null : _save,
                     child: _busy
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                           )
-                        : const Text('Save and continue'),
+                        : const Text('Save and Continue'),
                   ),
+                  const SizedBox(height: 6),
                   TextButton(
-                    onPressed: _busy
-                        ? null
-                        : () => FirebaseAuth.instance.signOut(),
+                    onPressed: _busy ? null : () => FirebaseAuth.instance.signOut(),
                     child: const Text('Sign out'),
                   ),
                 ],
@@ -646,6 +720,7 @@ class _ProfileField extends StatelessWidget {
   final TextInputType? keyboard;
   final TextCapitalization textCapitalization;
   final String? Function(String?)? validator;
+
   @override
   Widget build(BuildContext context) => TextFormField(
     controller: controller,
@@ -659,154 +734,54 @@ class _ProfileField extends StatelessWidget {
 class _RoleChoice extends StatelessWidget {
   const _RoleChoice({
     required this.label,
+    required this.icon,
     required this.value,
     required this.selected,
     required this.onTap,
   });
-  final String label, value, selected;
+  final String label;
+  final IconData icon;
+  final String value, selected;
   final ValueChanged<String> onTap;
+
   @override
   Widget build(BuildContext context) {
     final active = selected == value;
-    return ChoiceChip(
-      label: Text(label),
-      selected: active,
-      onSelected: (_) => onTap(value),
-      selectedColor: const Color(0xFFEAF3FA),
-      side: BorderSide(color: active ? AppColors.blue : AppColors.border),
-      labelStyle: TextStyle(
-        color: active ? AppColors.blue : AppColors.ink,
-        fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-      ),
-    );
-  }
-}
-
-class _ProfileLoadError extends StatelessWidget {
-  const _ProfileLoadError({
-    required this.onRetry,
-    required this.onContinueOffline,
-    this.error,
-  });
-
-  final VoidCallback onRetry;
-  final VoidCallback onContinueOffline;
-  final Object? error;
-
-  void _showConfigureUrlDialog(BuildContext context) {
-    final controller = TextEditingController(text: CustomerProfileRepository.effectiveBaseUrl);
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Backend API Settings'),
-        content: Column(
+    return InkWell(
+      onTap: () => onTap(value),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFFEAF3FA) : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: active ? AppColors.blue : AppColors.border,
+            width: active ? 2 : 1,
+          ),
+        ),
+        child: Row(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Enter the backend server URL accessible by this device:',
-              style: TextStyle(fontSize: 13, color: AppColors.muted),
+            Icon(
+              icon,
+              size: 18,
+              color: active ? AppColors.blue : AppColors.muted,
             ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: controller,
-              decoration: const InputDecoration(
-                hintText: 'e.g. http://192.168.1.50:8000/api/v1',
-                labelText: 'API Base URL',
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: active ? AppColors.blue : AppColors.ink,
+                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                fontSize: 13,
               ),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final newUrl = controller.text.trim();
-              if (newUrl.isNotEmpty) {
-                CustomerProfileRepository.setCustomBaseUrl(newUrl);
-                Navigator.of(ctx).pop();
-                onRetry();
-              }
-            },
-            child: const Text('Save & Retry'),
-          ),
-        ],
       ),
     );
   }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.cloud_off_outlined,
-                  size: 50,
-                  color: AppColors.blue,
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Backend Connection Offline',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.ink,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  error is HttpException
-                      ? (error as HttpException).message
-                      : 'The mobile app could not reach the backend server at ${CustomerProfileRepository.effectiveBaseUrl}. You can continue in offline mode or update the server address.',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.muted, fontSize: 13),
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: onContinueOffline,
-                    icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                    label: const Text('Continue in Offline Mode'),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: onRetry,
-                    icon: const Icon(Icons.refresh_rounded, size: 18),
-                    label: const Text('Retry Connection'),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextButton.icon(
-                  onPressed: () => _showConfigureUrlDialog(context),
-                  icon: const Icon(Icons.settings_outlined, size: 18),
-                  label: const Text('Change Server URL'),
-                ),
-                TextButton(
-                  onPressed: () => FirebaseAuth.instance.signOut(),
-                  child: const Text('Sign out'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
 }
 
 class _LoadingPage extends StatelessWidget {
