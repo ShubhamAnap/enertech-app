@@ -6,8 +6,8 @@ class CustomerAuthService {
   static Future<void>? _googleInitialization;
 
   Future<UserCredential> signInWithGoogle() async {
-    final clientId = dotenv.env['GOOGLE_SERVER_CLIENT_ID']?.trim();
-    if (clientId == null || clientId.isEmpty) {
+    final clientId = (dotenv.isInitialized ? dotenv.env['GOOGLE_SERVER_CLIENT_ID'] : null)?.trim() ?? '423316048940-e0915dl09gcg428dhffek68o87f5djvt.apps.googleusercontent.com';
+    if (clientId.isEmpty) {
       throw FirebaseAuthException(code: 'google-not-configured', message: 'Google sign-in is not configured for this Firebase app yet.');
     }
     final google = GoogleSignIn.instance;

@@ -14,7 +14,7 @@ class CatalogueException implements Exception {
 }
 
 class CatalogueRepository {
-  CatalogueRepository({String? baseUrl}) : _baseUrl = baseUrl ?? (const String.fromEnvironment('API_BASE_URL').isNotEmpty ? const String.fromEnvironment('API_BASE_URL') : (dotenv.env['API_BASE_URL'] ?? ''));
+  CatalogueRepository({String? baseUrl}) : _baseUrl = baseUrl ?? (const String.fromEnvironment('API_BASE_URL').isNotEmpty ? const String.fromEnvironment('API_BASE_URL') : ((dotenv.isInitialized ? dotenv.env['API_BASE_URL'] : null) ?? 'http://10.0.2.2:8000/api/v1'));
 
   final String _baseUrl;
 

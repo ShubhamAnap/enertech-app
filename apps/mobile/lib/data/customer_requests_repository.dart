@@ -22,7 +22,7 @@ class CustomerRequestRecord {
 }
 
 class CustomerRequestsRepository {
-  CustomerRequestsRepository({String? baseUrl}) : _baseUrl = baseUrl ?? (const String.fromEnvironment('API_BASE_URL').isNotEmpty ? const String.fromEnvironment('API_BASE_URL') : (dotenv.env['API_BASE_URL'] ?? ''));
+  CustomerRequestsRepository({String? baseUrl}) : _baseUrl = baseUrl ?? (const String.fromEnvironment('API_BASE_URL').isNotEmpty ? const String.fromEnvironment('API_BASE_URL') : ((dotenv.isInitialized ? dotenv.env['API_BASE_URL'] : null) ?? 'http://10.0.2.2:8000/api/v1'));
   final String _baseUrl;
 
   Future<List<CustomerRequestRecord>> loadMine() async {
