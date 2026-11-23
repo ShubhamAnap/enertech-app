@@ -19,8 +19,21 @@ if ($forbidden.Count -gt 0) { throw "Remove server-only values from apps/mobile/
 $env:APPDATA = Join-Path $projectRoot ".dev\appdata"
 $env:LOCALAPPDATA = Join-Path $projectRoot ".dev\local-appdata"
 $env:PUB_CACHE = Join-Path $projectRoot ".dev\pub-cache"
+$env:GRADLE_USER_HOME = Join-Path $projectRoot ".dev\gradle"
+$env:TEMP = Join-Path $projectRoot ".dev\temp"
+$env:TMP = Join-Path $projectRoot ".dev\temp"
 $env:FLUTTER_SUPPRESS_ANALYTICS = "true"
-$env:PATH = "$env:PATH;$env:WINDIR\System32;$env:WINDIR;$env:WINDIR\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd"
+$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot"
+$env:ANDROID_HOME = "C:\Users\User\AppData\Local\Android\Sdk"
+$env:PATH = "$env:JAVA_HOME\bin;$env:PATH;$env:WINDIR\System32;$env:WINDIR;$env:WINDIR\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd"
 Push-Location $mobileDirectory
-try { & $flutter build apk --debug }
+try {
+    & $flutter build apk --release
+    $outputApk = Join-Path $mobileDirectory "build\app\outputs\flutter-apk\app-release.apk"
+    $targetApk = Join-Path $projectRoot "update.apk"
+    if (Test-Path -LiteralPath $outputApk) {
+        Copy-Item -LiteralPath $outputApk -Destination $targetApk -Force
+        Write-Host "Success: Copied release APK to $targetApk"
+    }
+}
 finally { Pop-Location }
