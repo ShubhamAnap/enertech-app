@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "423316048940",
+    "project_id": "enertech-ups",
+    "storage_bucket": "enertech-ups.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:423316048940:android:405f584a1724eadcea1589",
+        "android_client_info": {
+          "package_name": "com.enertech.enertech_customer"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAUbtbOGwZwjLLAacs5VZtJKwSZfyNAxW4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,390 @@
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+
+from app.schemas.catalogue import ProductDocument, ProductPage
+
+
+class CategoryWrite(BaseModel):
+    slug: str = Field(min_length=2, max_length=120, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    name: str = Field(min_length=2, max_length=180)
+    description: str | None = Field(default=None, max_length=3000)
+    sort_order: int = Field(default=0, ge=0, le=10000)
+    image_url: HttpUrl | None = None
+
+
+class CategoryPatch(BaseModel):
+    slug: str | None = Field(default=None, min_length=2, max_length=120, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    name: str | None = Field(default=None, min_length=2, max_length=180)
+    description: str | None = Field(default=None, max_length=3000)
+    sort_order: int | None = Field(default=None, ge=0, le=10000)
+    image_url: HttpUrl | None = None
+
+
+class CategoryAdmin(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    slug: str
+    name: str
+    description: str | None
+    sort_order: int
+    image_url: str | None
+    wordpress_source_id: str | None
+    is_published: bool
+    has_draft: bool
+
+
+class ProductWrite(BaseModel):
+    category_id: UUID
+    slug: str = Field(min_length=2, max_length=180, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    name: str = Field(min_length=2, max_length=220)
+    model_code: str | None = Field(default=None, max_length=120)
+    summary: str | None = Field(default=None, max_length=500)
+    description: str | None = Field(default=None, max_length=12000)
+    applications: list[str] = Field(default_factory=list, max_length=24)
+    features: list[str] = Field(default_factory=list, max_length=32)
+    specifications: dict[str, str | int | float | bool | list[str]] = Field(default_factory=dict)
+    image_url: HttpUrl | None = None
+    gallery_images: list[HttpUrl] = Field(default_factory=list, max_length=16)
+    price_minor: int | None = Field(default=None, ge=0, le=999_999_999_999)
+    currency_code: str = Field(default="INR", min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
+    currency_minor_unit: int = Field(default=2, ge=0, le=4)
+    stock_status: Literal["instock", "outofstock", "onbackorder", "unknown"] = "unknown"
+    stock_quantity: int | None = Field(default=None, ge=0, le=10_000_000)
+    documents: list[ProductDocument] = Field(default_factory=list, max_length=24)
+    source_reference: str | None = Field(default=None, max_length=500)
+    wordpress_source_id: str | None = Field(default=None, max_length=160)
+    wordpress_source_url: HttpUrl | None = None
+
+    @field_validator("applications", "features")
+    @classmethod
+    def normalize_bounded_text(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values if value.strip()]
+        if any(len(value) > 180 for value in cleaned):
+            raise ValueError("Each entry must be 180 characters or fewer")
+        return cleaned
+
+    @field_validator("specifications")
+    @classmethod
+    def validate_specification_fields(cls, values: dict[str, object]) -> dict[str, object]:
+        if len(values) > 60:
+            raise ValueError("A product can contain at most 60 specification fields")
+        if any(not key.strip() or len(key) > 80 for key in values):
+            raise ValueError("Specification field names must be between 1 and 80 characters")
+        return values
+
+
+class ProductPatch(BaseModel):
+    category_id: UUID | None = None
+    slug: str | None = Field(default=None, min_length=2, max_length=180, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    name: str | None = Field(default=None, min_length=2, max_length=220)
+    model_code: str | None = Field(default=None, max_length=120)
+    summary: str | None = Field(default=None, max_length=500)
+    description: str | None = Field(default=None, max_length=12000)
+    applications: list[str] | None = Field(default=None, max_length=24)
+    features: list[str] | None = Field(default=None, max_length=32)
+    specifications: dict[str, str | int | float | bool | list[str]] | None = None
+    image_url: HttpUrl | None = None
+    gallery_images: list[HttpUrl] | None = Field(default=None, max_length=16)
+    price_minor: int | None = Field(default=None, ge=0, le=999_999_999_999)
+    currency_code: str | None = Field(default=None, min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
+    currency_minor_unit: int | None = Field(default=None, ge=0, le=4)
+    stock_status: Literal["instock", "outofstock", "onbackorder", "unknown"] | None = None
+    stock_quantity: int | None = Field(default=None, ge=0, le=10_000_000)
+    documents: list[ProductDocument] | None = Field(default=None, max_length=24)
+    source_reference: str | None = Field(default=None, max_length=500)
+    wordpress_source_id: str | None = Field(default=None, max_length=160)
+    wordpress_source_url: HttpUrl | None = None
+
+
+class ProductAdmin(BaseModel):
+    id: UUID
+    category_id: UUID
+    slug: str
+    name: str
+    model_code: str | None
+    summary: str | None
+    description: str | None
+    applications: list[str]
+    features: list[str]
+    specifications: dict[str, object]
+    image_url: str | None
+    gallery_images: list[str]
+    price_minor: int | None
+    currency_code: str
+    currency_minor_unit: int
+    stock_status: str
+    stock_quantity: int | None
+    documents: list[ProductDocument]
+    source_reference: str | None
+    wordpress_source_id: str | None
+    wordpress_source_url: str | None
+    is_published: bool
+    has_draft: bool
+    updated_at: str
+
+
+class PageProduct(ProductAdmin):
+    pass
+
+
+class ProductAdminPage(ProductPage):
+    items: list[PageProduct]
+
+
+class HomeContent(BaseModel):
+    hero_title: str = Field(default="", max_length=120)
+    hero_description: str = Field(default="", max_length=500)
+    hero_cta_label: str = Field(default="", max_length=60)
+    hero_cta_target: Literal["products", "solution_finder", "quote", "support"] = "solution_finder"
+    announcement_title: str = Field(default="", max_length=120)
+    announcement_body: str = Field(default="", max_length=500)
+    announcement_visible: bool = False
+    featured_category_ids: list[UUID] = Field(default_factory=list, max_length=12)
+    featured_product_ids: list[UUID] = Field(default_factory=list, max_length=12)
+    section_order: list[Literal["categories", "featured_products", "requests", "announcements"]] = Field(default_factory=lambda: ["categories", "featured_products", "requests", "announcements"], max_length=4)
+    visible_sections: list[Literal["categories", "featured_products", "requests", "announcements"]] = Field(default_factory=lambda: ["categories", "featured_products", "requests", "announcements"], max_length=4)
+
+
+class ContactContent(BaseModel):
+    sales_phone: str = Field(default="", max_length=40)
+    support_phone: str = Field(default="", max_length=40)
+    whatsapp_number: str = Field(default="", max_length=40)
+    sales_email: str = Field(default="", max_length=254)
+    support_email: str = Field(default="", max_length=254)
+    office_address: str = Field(default="", max_length=1200)
+    support_hours: str = Field(default="", max_length=500)
+    availability_message: str = Field(default="", max_length=500)
+
+
+class SolutionFinderContent(BaseModel):
+    application_options: list[str] = Field(
+        default_factory=lambda: [
+            "Factory / Industrial machinery",
+            "Office / Commercial",
+            "Hospital / Medical equipment",
+            "Server room / Data centre",
+            "Home / Residential",
+            "Solar / Battery storage",
+            "Other",
+        ],
+        min_length=1,
+        max_length=20,
+    )
+    step_titles: list[str] = Field(
+        default_factory=lambda: [
+            "Where do you need power protection?",
+            "What needs power?",
+            "Do you know the capacity?",
+            "Where is the project?",
+            "When do you need it?",
+        ],
+        min_length=5,
+        max_length=5,
+    )
+    application_prompt: str = Field(default="Choose the application that best describes your requirement.", max_length=500)
+    general_prompt: str = Field(default="Share what you know. You can skip technical details you are unsure about.", max_length=500)
+
+    @field_validator("application_options", "step_titles")
+    @classmethod
+    def validate_nonempty_options(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values]
+        if any(not value or len(value) > 180 for value in cleaned):
+            raise ValueError("Options must be non-empty and no longer than 180 characters")
+        if len({value.casefold() for value in cleaned}) != len(cleaned):
+            raise ValueError("Options must be unique")
+        return cleaned
+
+
+class ChatContent(BaseModel):
+    model_config = ConfigDict(validate_default=True)
+
+    enabled: bool = False
+    integration: Literal["iframe", "hosted_widget"] = "hosted_widget"
+    embed_url: HttpUrl | None = "https://enertechups.cloud"
+    widget_script_url: HttpUrl | None = "https://enertechups.cloud/widget.js"
+    welcome_message: str = Field(default="", max_length=500)
+    fallback_message: str = Field(default="", max_length=500)
+    human_handoff_url: HttpUrl | None = None
+    human_handoff_enabled: bool = False
+
+
+class BrandContent(BaseModel):
+    display_name: str = Field(default="EnerTech", min_length=1, max_length=80)
+    logo_url: HttpUrl | None = None
+    support_icon_url: HttpUrl | None = None
+
+
+class ContentEnvelope(BaseModel):
+    key: str
+    draft_payload: dict[str, object]
+    published_payload: dict[str, object] | None
+    draft_revision: int
+    published_revision: int | None
+    updated_at: str | None
+
+
+class ServiceRequestWrite(BaseModel):
+    product_model: str = Field(min_length=1, max_length=120)
+    serial_number: str | None = Field(default=None, max_length=120)
+    problem_category: Literal["alarm", "battery", "performance", "installation", "other"]
+    description: str = Field(min_length=10, max_length=4000)
+    service_location: str = Field(min_length=2, max_length=500)
+
+
+class QuoteRequestWrite(BaseModel):
+    application: str = Field(min_length=2, max_length=180)
+    equipment_or_load: str = Field(min_length=2, max_length=1000)
+    capacity_known: bool = False
+    capacity: str | None = Field(default=None, max_length=120)
+    quantity: int = Field(default=1, ge=1, le=100000)
+    project_location: str = Field(default="", max_length=500)
+    expected_timeline: str = Field(default="", max_length=300)
+
+
+class CustomerRequestPublic(BaseModel):
+    id: UUID
+    kind: Literal["service", "quote"]
+    status: str
+    payload: dict[str, object]
+    resolution_note: str | None
+    created_at: str
+    updated_at: str
+
+
+class CustomerRequestAdmin(CustomerRequestPublic):
+    customer_uid: str
+    customer_email: str
+    assigned_to: str | None
+
+
+class CustomerRequestUpdate(BaseModel):
+    status: Literal["in_review", "assigned", "waiting_for_customer", "resolved", "quote_preparing", "quote_sent", "closed"]
+    assigned_to: str | None = Field(default=None, max_length=128)
+    resolution_note: str | None = Field(default=None, max_length=2000)
+
+
+class KnowledgeWrite(BaseModel):
+    slug: str = Field(min_length=2, max_length=180, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    title: str = Field(min_length=3, max_length=220)
+    category: str = Field(default="General", min_length=2, max_length=100)
+    answer: str = Field(min_length=10, max_length=12000)
+    source_reference: str | None = Field(default=None, max_length=1000)
+    sort_order: int = Field(default=0, ge=0, le=10000)
+
+
+class KnowledgePatch(BaseModel):
+    slug: str | None = Field(default=None, min_length=2, max_length=180, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    title: str | None = Field(default=None, min_length=3, max_length=220)
+    category: str | None = Field(default=None, min_length=2, max_length=100)
+    answer: str | None = Field(default=None, min_length=10, max_length=12000)
+    source_reference: str | None = Field(default=None, max_length=1000)
+    sort_order: int | None = Field(default=None, ge=0, le=10000)
+
+
+class KnowledgeAdmin(BaseModel):
+    id: UUID
+    slug: str
+    title: str
+    category: str
+    answer: str
+    source_reference: str | None
+    sort_order: int
+    is_published: bool
+    has_draft: bool
+
+
+class KnowledgePublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    slug: str
+    title: str
+    category: str
+    answer: str
+
+
+class CustomerProfileWrite(BaseModel):
+    customer_type: Literal["end_user", "reseller", "epc", "distributor"]
+    name: str = Field(min_length=2, max_length=180)
+    mobile_number: str = Field(min_length=7, max_length=24, pattern=r"^[+0-9()\-\s]+$")
+    email: str = Field(min_length=5, max_length=254)
+    location: str = Field(min_length=2, max_length=500)
+    company_name: str | None = Field(default=None, max_length=220)
+    gst_number: str | None = Field(default=None, max_length=32)
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if "@" not in normalized or "." not in normalized.rsplit("@", 1)[-1]:
+            raise ValueError("Enter a valid email address")
+        return normalized
+
+    @field_validator("company_name", "gst_number")
+    @classmethod
+    def normalize_optional_business_fields(cls, value: str | None) -> str | None:
+        return value.strip() if value and value.strip() else None
+
+    @field_validator("gst_number")
+    @classmethod
+    def normalize_gst_number(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+    @field_validator("company_name")
+    @classmethod
+    def require_company_name_for_business(cls, value: str | None, info) -> str | None:
+        if info.data.get("customer_type") != "end_user" and (value is None or len(value) < 2):
+            raise ValueError("Company name is required for reseller, EPC, and distributor accounts")
+        return value
+
+    @field_validator("gst_number")
+    @classmethod
+    def require_gst_for_business(cls, value: str | None, info) -> str | None:
+        if info.data.get("customer_type") != "end_user" and not value:
+            raise ValueError("GST number is required for reseller, EPC, and distributor accounts")
+        return value
+
+
+class CustomerProfilePublic(BaseModel):
+    id: UUID
+    customer_type: Literal["end_user", "reseller", "epc", "distributor"]
+    name: str
+    mobile_number: str
+    email: str
+    location: str
+    company_name: str | None
+    gst_number: str | None
+    created_at: str
+    updated_at: str
+
+
+class AdminAccountWrite(BaseModel):
+    firebase_uid: str = Field(min_length=1, max_length=128)
+    email: str | None = Field(default=None, max_length=254)
+    display_name: str | None = Field(default=None, max_length=180)
+    role: Literal["content_editor", "admin", "super_admin"] = "content_editor"
+    is_active: bool = True
+
+
+class AdminAccountPublic(BaseModel):
+    id: UUID
+    firebase_uid: str
+    email: str | None
+    display_name: str | None
+    role: Literal["content_editor", "admin", "super_admin"]
+    is_active: bool
+    created_at: str
+    updated_at: str
+
+
+class AuditEventPublic(BaseModel):
+    id: UUID
+    actor_uid: str
+    action: str
+    entity_type: str
+    entity_id: str
+    change_summary: dict[str, object]
+    created_at: str
