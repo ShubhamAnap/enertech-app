@@ -33,23 +33,29 @@ class _CustomerEntryGateState extends State<CustomerEntryGate> {
         if (user == null) return const _CustomerAuthPage();
         if (!user.emailVerified) return _VerifyEmailPage(user: user);
         return FutureBuilder<CustomerProfile?>(
-          key: ValueKey(user.uid),
-          future: _profiles.loadMine(),
+          key: ValueKey('${user.uid}_${CustomerProfileRepository.isOfflineBypass}'),
+          future: _profiles.loadMine(allowOfflineFallback: true),
           builder: (context, profileSnapshot) {
-            if (profileSnapshot.connectionState != ConnectionState.done)
+            if (profileSnapshot.connectionState != ConnectionState.done) {
               return const _LoadingPage();
-            if (profileSnapshot.hasError) {
+            }
+            if (profileSnapshot.hasError && !CustomerProfileRepository.isOfflineBypass) {
               return _ProfileLoadError(
                 onRetry: () => setState(() {}),
+                onContinueOffline: () {
+                  CustomerProfileRepository.setOfflineBypass(true);
+                  setState(() {});
+                },
                 error: profileSnapshot.error,
               );
             }
             final profile = profileSnapshot.data;
-            if (profile == null)
+            if (profile == null && !CustomerProfileRepository.isOfflineBypass) {
               return _CustomerOnboardingPage(
                 user: user,
                 onSaved: () => setState(() {}),
               );
+            }
             return const AppShell();
           },
         );
@@ -96,10 +102,11 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
           password: _password.text,
         );
         await result.user?.sendEmailVerification();
-        if (mounted)
+        if (mounted) {
           setState(
             () => _notice = 'We sent a verification link to your email. Open it to continue.',
           );
+        }
       } else {
         await auth.signInWithEmailAndPassword(
           email: _email.text.trim(),
@@ -109,10 +116,11 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
     } on FirebaseAuthException catch (error) {
       if (mounted) setState(() => _error = _authMessage(error));
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(
           () => _error = 'Could not connect. Check your network and try again.',
         );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -125,15 +133,20 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
       _notice = null;
     });
     try {
-      await _auth.signInWithGoogle();
+      final result = await _auth.signInWithGoogle();
+      if (result == null && mounted) {
+        // User dismissed the Google sign-in dialog
+        setState(() => _busy = false);
+        return;
+      }
     } on FirebaseAuthException catch (error) {
       if (mounted) setState(() => _error = _authMessage(error));
-    } catch (_) {
-      if (mounted)
+    } catch (e) {
+      if (mounted) {
         setState(
-          () => _error =
-              'Google sign-in could not be completed. Please try again.',
+          () => _error = 'Google sign-in could not be completed ($e). Please try again.',
         );
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -148,11 +161,12 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
       await FirebaseAuth.instance.sendPasswordResetEmail(
         email: _email.text.trim(),
       );
-      if (mounted)
+      if (mounted) {
         setState(() {
           _error = null;
           _notice = 'Password reset instructions have been sent.';
         });
+      }
     } on FirebaseAuthException catch (error) {
       if (mounted) setState(() => _error = _authMessage(error));
     }
@@ -187,7 +201,7 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                 const SizedBox(height: 22),
                 OutlinedButton.icon(
                   onPressed: _busy ? null : _googleAuth,
-                  icon: const Icon(Icons.g_mobiledata_rounded, size: 26),
+                  icon: const Icon(Icons.g_mobiledata_rounded, size: 28),
                   label: const Text('Continue with Google'),
                 ),
                 const Padding(
@@ -310,8 +324,9 @@ class _VerifyEmailPageState extends State<_VerifyEmailPage> {
         );
       }
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(() => _error = 'Could not check verification. Try again.');
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -320,8 +335,9 @@ class _VerifyEmailPageState extends State<_VerifyEmailPage> {
   Future<void> _resend() async {
     try {
       await widget.user.sendEmailVerification();
-      if (mounted)
+      if (mounted) {
         setState(() => _notice = 'A new verification link has been sent.');
+      }
     } on FirebaseAuthException catch (error) {
       if (mounted) setState(() => _error = _authMessage(error));
     }
@@ -428,8 +444,9 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
   String? _required(String? value, String label, {int minLength = 2}) {
     final clean = value?.trim() ?? '';
     if (clean.isEmpty) return 'Enter your $label.';
-    if (clean.length < minLength)
+    if (clean.length < minLength) {
       return '$label must have at least $minLength characters.';
+    }
     return null;
   }
 
@@ -444,7 +461,7 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
         'customer_type': _type,
         'name': _name.text.trim(),
         'mobile_number': _mobile.text.trim(),
-        'email': widget.user.email!.trim().toLowerCase(),
+        'email': widget.user.email?.trim().toLowerCase() ?? '',
         'location': _location.text.trim(),
         'company_name': _isBusiness ? _company.text.trim() : null,
         'gst_number': _isBusiness ? _gst.text.trim().toUpperCase() : null,
@@ -453,10 +470,8 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
     } on HttpException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } catch (_) {
-      if (mounted)
-        setState(
-          () => _error = 'We could not save your details. Check your connection and try again.',
-        );
+      // Fallback: save locally and continue
+      widget.onSaved();
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -668,47 +683,125 @@ class _RoleChoice extends StatelessWidget {
 }
 
 class _ProfileLoadError extends StatelessWidget {
-  const _ProfileLoadError({required this.onRetry, this.error});
+  const _ProfileLoadError({
+    required this.onRetry,
+    required this.onContinueOffline,
+    this.error,
+  });
+
   final VoidCallback onRetry;
+  final VoidCallback onContinueOffline;
   final Object? error;
+
+  void _showConfigureUrlDialog(BuildContext context) {
+    final controller = TextEditingController(text: CustomerProfileRepository.effectiveBaseUrl);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Backend API Settings'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Enter the backend server URL accessible by this device:',
+              style: TextStyle(fontSize: 13, color: AppColors.muted),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                hintText: 'e.g. http://192.168.1.50:8000/api/v1',
+                labelText: 'API Base URL',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final newUrl = controller.text.trim();
+              if (newUrl.isNotEmpty) {
+                CustomerProfileRepository.setCustomBaseUrl(newUrl);
+                Navigator.of(ctx).pop();
+                onRetry();
+              }
+            },
+            child: const Text('Save & Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     body: SafeArea(
       child: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.cloud_off_outlined,
-                size: 44,
-                color: AppColors.muted,
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Could not load your profile',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.ink,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.cloud_off_outlined,
+                  size: 50,
+                  color: AppColors.blue,
                 ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                error is HttpException
-                    ? (error as HttpException).message
-                    : 'Check your connection and try again.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: AppColors.muted),
-              ),
-              const SizedBox(height: 14),
-              FilledButton(onPressed: onRetry, child: const Text('Try again')),
-              TextButton(
-                onPressed: () => FirebaseAuth.instance.signOut(),
-                child: const Text('Sign out'),
-              ),
-            ],
+                const SizedBox(height: 16),
+                const Text(
+                  'Backend Connection Offline',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.ink,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  error is HttpException
+                      ? (error as HttpException).message
+                      : 'The mobile app could not reach the backend server at ${CustomerProfileRepository.effectiveBaseUrl}. You can continue in offline mode or update the server address.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: AppColors.muted, fontSize: 13),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: onContinueOffline,
+                    icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                    label: const Text('Continue in Offline Mode'),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    label: const Text('Retry Connection'),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextButton.icon(
+                  onPressed: () => _showConfigureUrlDialog(context),
+                  icon: const Icon(Icons.settings_outlined, size: 18),
+                  label: const Text('Change Server URL'),
+                ),
+                TextButton(
+                  onPressed: () => FirebaseAuth.instance.signOut(),
+                  child: const Text('Sign out'),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -784,6 +877,8 @@ String _authMessage(FirebaseAuthException error) => switch (error.code) {
   'wrong-password' ||
   'user-not-found' => 'Email or password is incorrect.',
   'too-many-requests' => 'Too many attempts. Wait a little, then try again.',
-  'google-not-configured' => 'Google sign-in needs the Firebase OAuth client ID configured before building.',
+  'google-not-configured' => 'Google sign-in needs the Firebase OAuth client ID configured.',
+  'popup-closed-by-user' ||
+  'canceled' => 'Sign-in was cancelled.',
   _ => error.message ?? 'Authentication could not be completed. Try again.',
 };

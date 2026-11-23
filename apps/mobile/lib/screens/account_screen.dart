@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../data/customer_profile_repository.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 
@@ -27,6 +28,54 @@ class _AccountScreenState extends State<AccountScreen> {
     _email.dispose();
     _password.dispose();
     super.dispose();
+  }
+
+  void _changeServerUrl(BuildContext context) {
+    final controller = TextEditingController(text: CustomerProfileRepository.effectiveBaseUrl);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Backend API Server'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Configure the backend endpoint for catalogue and profile synchronization:',
+              style: TextStyle(fontSize: 13, color: AppColors.muted),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: 'API Base URL',
+                hintText: 'e.g. http://192.168.1.50:8000/api/v1',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final newUrl = controller.text.trim();
+              if (newUrl.isNotEmpty) {
+                CustomerProfileRepository.setCustomBaseUrl(newUrl);
+                setState(() {});
+                Navigator.of(ctx).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Server URL set to: $newUrl')),
+                );
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _submit() async {
@@ -116,25 +165,57 @@ class _AccountScreenState extends State<AccountScreen> {
     Card(child: Padding(padding: const EdgeInsets.all(16), child: Row(children: [
       Container(width: 48, height: 48, decoration: BoxDecoration(color: const Color(0xFFEAF3FA), borderRadius: BorderRadius.circular(16)), child: const Icon(Icons.person_outline_rounded, color: AppColors.blue)),
       const SizedBox(width: 12),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(user.displayName ?? 'EnerTech customer', style: const TextStyle(color: AppColors.ink, fontWeight: FontWeight.w700)), const SizedBox(height: 3), Text(user.email ?? '', style: const TextStyle(color: AppColors.muted, fontSize: 12)), Text(user.emailVerified ? 'Email verified' : 'Email verification pending', style: const TextStyle(color: AppColors.muted, fontSize: 11))])),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(user.displayName ?? 'EnerTech customer', style: const TextStyle(color: AppColors.ink, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 3),
+        Text(user.email ?? '', style: const TextStyle(color: AppColors.muted, fontSize: 12)),
+        Text(user.emailVerified ? 'Email verified' : 'Email verification pending', style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+      ])),
     ]))),
     const SizedBox(height: 14),
-    const NoticeCard(message: 'Your requests and service history will appear here as those workflows are connected.'),
-    const SizedBox(height: 15),
-    const _AccountAction(icon: Icons.business_outlined, title: 'Business profile', detail: 'Profile storage is not configured yet'),
-    const _AccountAction(icon: Icons.location_on_outlined, title: 'Project locations', detail: 'Address storage is not configured yet'),
-    const _AccountAction(icon: Icons.notifications_outlined, title: 'Notifications', detail: 'Preferences are not connected'),
-    const _AccountAction(icon: Icons.privacy_tip_outlined, title: 'Privacy & settings', detail: 'Policy content has not been supplied'),
-    const SizedBox(height: 8),
-    OutlinedButton.icon(onPressed: () => FirebaseAuth.instance.signOut(), icon: const Icon(Icons.logout_rounded), label: const Text('Sign out')),
+    _AccountAction(
+      icon: Icons.dns_outlined,
+      title: 'Server connection',
+      detail: CustomerProfileRepository.effectiveBaseUrl,
+      onTap: () => _changeServerUrl(context),
+    ),
+    const SizedBox(height: 5),
+    const _AccountAction(icon: Icons.business_outlined, title: 'Business profile', detail: 'Stored in customer profile'),
+    const _AccountAction(icon: Icons.location_on_outlined, title: 'Project locations', detail: 'Configured in profile'),
+    const _AccountAction(icon: Icons.notifications_outlined, title: 'Notifications', detail: 'App announcements enabled'),
+    const SizedBox(height: 14),
+    OutlinedButton.icon(
+      onPressed: () => FirebaseAuth.instance.signOut(),
+      icon: const Icon(Icons.logout_rounded),
+      label: const Text('Sign out'),
+    ),
   ]);
 }
 
 class _AccountAction extends StatelessWidget {
-  const _AccountAction({required this.icon, required this.title, required this.detail});
+  const _AccountAction({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.onTap,
+  });
+
   final IconData icon;
   final String title;
   final String detail;
+  final VoidCallback? onTap;
+
   @override
-  Widget build(BuildContext context) => Padding(padding: const EdgeInsets.only(bottom: 9), child: Card(child: ListTile(leading: Icon(icon, color: AppColors.blue), title: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)), subtitle: Text(detail, style: const TextStyle(fontSize: 11)), trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.muted), onTap: null)));
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 9),
+    child: Card(
+      child: ListTile(
+        leading: Icon(icon, color: AppColors.blue),
+        title: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        subtitle: Text(detail, style: const TextStyle(fontSize: 11, color: AppColors.muted)),
+        trailing: Icon(onTap != null ? Icons.edit_outlined : Icons.chevron_right_rounded, color: AppColors.muted, size: 20),
+        onTap: onTap,
+      ),
+    ),
+  );
 }

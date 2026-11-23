@@ -1,0 +1,13 @@
+{
+  "name": "enertech-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/admin"
+  ],
+  "scripts": {
+    "build": "npm run build --prefix apps/admin",
+    "start": "npm run start --prefix apps/admin",
+    "lint": "npm run lint --prefix apps/admin"
+  }
+}

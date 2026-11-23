@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs_22"]
+
+[phases.install]
+cmds = ["cd apps/admin && npm ci"]
+
+[phases.build]
+cmds = ["cd apps/admin && npm run build"]
+
+[start]
+cmd = "cd apps/admin && node .next/standalone/server.js"
