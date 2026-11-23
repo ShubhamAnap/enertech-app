@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from html.parser import HTMLParser
+import json
 from typing import Any
 from uuid import UUID
 
@@ -112,6 +113,24 @@ def _wordpress_client() -> tuple[httpx.Client, str, Any]:
     return client, f"{base}/{path}", settings
 
 
+def _safe_json(response: httpx.Response) -> Any:
+    try:
+        return response.json()
+    except Exception:
+        text = response.text
+        start_arr = text.find("[")
+        start_obj = text.find("{")
+        if start_arr != -1 and (start_obj == -1 or start_arr < start_obj):
+            end_arr = text.rfind("]")
+            if end_arr != -1:
+                return json.loads(text[start_arr:end_arr + 1])
+        elif start_obj != -1:
+            end_obj = text.rfind("}")
+            if end_obj != -1:
+                return json.loads(text[start_obj:end_obj + 1])
+        raise
+
+
 def _fetch(limit: int, page: int = 1) -> tuple[list[dict[str, Any]], Any]:
     client, url, settings = _wordpress_client()
     try:
@@ -121,7 +140,7 @@ def _fetch(limit: int, page: int = 1) -> tuple[list[dict[str, Any]], Any]:
         if response.status_code == 404:
             raise HTTPException(status_code=502, detail="WordPress product REST route was not found; check WORDPRESS_PRODUCTS_PATH")
         response.raise_for_status()
-        payload = response.json()
+        payload = _safe_json(response)
         if not isinstance(payload, list):
             raise HTTPException(status_code=502, detail="WordPress returned an unexpected product response")
         return [item for item in payload if isinstance(item, dict)], settings
@@ -164,7 +183,7 @@ def _fetch_all(path: str, *, authenticated: bool, extra_params: dict[str, Any] |
                 raise HTTPException(status_code=502, detail=f"WordPress REST route not found: {path}")
             try:
                 response.raise_for_status()
-                payload = response.json()
+                payload = _safe_json(response)
             except (httpx.HTTPError, ValueError) as error:
                 raise HTTPException(status_code=502, detail=f"WordPress returned an invalid response from {path}") from error
             if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
