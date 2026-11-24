@@ -87,13 +87,16 @@ def get_current_admin(
     session: Session = Depends(get_session),
 ) -> AdminIdentity:
     settings = get_settings()
+    account = session.scalar(select(AdminAccount).where(AdminAccount.firebase_uid == identity.uid))
+    if account is not None:
+        if not account.is_active:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is not authorized for the CMS")
+        return AdminIdentity(account.firebase_uid, account.email or identity.email, account.display_name or identity.name, account.role)
+
     if identity.uid in settings.bootstrap_admin_uids:
         return AdminIdentity(identity.uid, identity.email, identity.name, "super_admin")
 
-    account = session.scalar(select(AdminAccount).where(AdminAccount.firebase_uid == identity.uid))
-    if account is None or not account.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is not authorized for the CMS")
-    return AdminIdentity(account.firebase_uid, account.email or identity.email, account.display_name or identity.name, account.role)
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is not authorized for the CMS")
 
 
 def require_admin_roles(*roles: str):
@@ -103,3 +106,4 @@ def require_admin_roles(*roles: str):
         return admin
 
     return dependency
+
