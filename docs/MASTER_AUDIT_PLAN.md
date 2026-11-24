@@ -35,7 +35,8 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 - [x] Remove an invented 22% MRP calculation and a static "Default Sales Channel" label from product listings; show source, published price, and reported stock instead.
 - [x] Add product/collection image upload, product gallery URLs, multiple document editing, and stock quantity input to the CMS.
 - [x] Use sized Next.js image components for CMS product previews and replace emoji used as decorative product/sync icons.
-- [ ] Verify auth role boundaries, owner-only customer reads, request transitions, upload limits, and migration constraints in an isolated environment.
+- [x] Test customer-request owner scoping, content-editor restrictions, closed-request transitions, and media size limits against isolated SQLite.
+- [ ] Verify Firebase token revocation and execute/rollback schema migrations against staging Supabase; verify live storage policies and role boundaries there.
 
 ## Priority 1 — Core CMS content workflows
 
@@ -152,5 +153,5 @@ CMS app-content parity checked from source:
 
 - This document records source-level findings. No live service behavior can be confirmed without the external project credentials and source mappings.
 - Visual/device QA remains open. The UI/UX Pro Max search returned guidance for visible labels, correct input types, password-manager support, and confirmation feedback; small-screen, landscape, dynamic-text, contrast, touch-target, and keyboard-focus checks still need rendered device/browser review.
-- Local checks: CMS ESLint reports zero errors or warnings; TypeScript `--noEmit` and a Next.js production-mode build passed with test values, including earlier explicit checks for the `sslip.io` test exception and rejection of arbitrary HTTP domains; the full backend suite passed (10 tests), including database-error redaction and asynchronous media-upload checks, Python compilation passed, and Alembic offline SQL generation compiled through `6f3a1f8d2c70`; Flutter `analyze` and all six app tests passed, including product comparison rendering/removal, selection limits, and cached category-slug filtering. The Android release guard stops until a production HTTPS API and release signing key are configured. No emulator/device is available, so installed-device visual verification remains open. No live database migration or staging deployment was run.
+- Local checks: CMS ESLint reports zero errors or warnings; TypeScript `--noEmit` and a Next.js production-mode build passed with test values, including earlier explicit checks for the `sslip.io` test exception and rejection of arbitrary HTTP domains; the full backend suite passed (14 tests), including database-error redaction, async media upload/size enforcement, owner scoping, editor authorization, and request-transition checks; Python compilation passed, and Alembic offline SQL generation compiled through `6f3a1f8d2c70`; Flutter `analyze` and all six app tests passed, including product comparison rendering/removal, selection limits, and cached category-slug filtering. The Android release guard stops until a production HTTPS API and release signing key are configured. No emulator/device is available, so installed-device visual verification remains open. No live database migration or staging deployment was run.
 
