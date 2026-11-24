@@ -185,13 +185,18 @@ def submit_contact_inquiry(
     _require_verified_customer(identity)
     now = datetime.now(timezone.utc)
     recent_count = session.scalar(select(func.count()).select_from(ContactInquiry).where(
-        ContactInquiry.email == identity.email,
         ContactInquiry.created_at >= now - timedelta(hours=1),
+        (ContactInquiry.customer_uid == identity.uid)
+        | (
+            ContactInquiry.customer_uid.is_(None)
+            & (func.lower(ContactInquiry.email) == (identity.email or "").lower())
+        ),
     )) or 0
     if recent_count >= 5:
         raise HTTPException(status_code=429, detail="You have sent several enquiries recently. Please try again later.")
     inquiry = ContactInquiry(
         id=uuid4(),
+        customer_uid=identity.uid,
         name=body.name,
         email=identity.email or "",
         phone=body.phone,
@@ -291,3 +296,4 @@ def update_contact_inquiry(
         created_at=record.created_at.isoformat(),
         updated_at=record.updated_at.isoformat(),
     )
+
