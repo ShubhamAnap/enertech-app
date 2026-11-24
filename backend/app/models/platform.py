@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Uuid, func
+from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -49,6 +49,7 @@ class AuditEvent(Base):
 
 class CustomerRequest(Base):
     __tablename__ = "customer_requests"
+    __table_args__ = (Index("ix_customer_requests_customer_created", "customer_uid", "created_at"),)
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     customer_uid: Mapped[str] = mapped_column(String(128), index=True)
