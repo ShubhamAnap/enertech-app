@@ -84,4 +84,3 @@ async def upload_media(
     ))
     session.commit()
     return MediaAssetPublic(url=public_url, path=storage_path, bucket=bucket, content_type=content_type, size_bytes=len(payload))
-
