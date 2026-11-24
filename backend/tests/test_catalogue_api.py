@@ -16,7 +16,7 @@ from app.core.auth import Identity, get_current_identity
 from app.db.base import Base
 from app.db.session import get_session
 from app.main import app
-from app.models import AdminAccount, ContactInquiry, CustomerRequest, Product, ProductCategory
+from app.models import AdminAccount, AppConfig, ContactInquiry, CustomerRequest, Product, ProductCategory
 
 
 @pytest.fixture
@@ -44,6 +44,15 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
 def test_health_endpoints(client: TestClient) -> None:
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/api/v1/health/ready").json() == {"status": "ready"}
+
+
+def test_production_readiness_requires_firebase_server_credentials(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(api_router, "get_settings", lambda: SimpleNamespace(
+        app_env="production", firebase_project_id="enertech-ups", firebase_service_account_json="",
+    ))
+    response = client.get("/api/v1/health/ready")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Firebase Authentication is not configured"}
 
 
 def test_database_outage_does_not_expose_connection_details(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -245,7 +254,59 @@ def test_catalogue_rejects_invalid_featured_product_ids(client: TestClient) -> N
     assert client.get("/api/v1/catalogue/products?ids=" + ",".join(str(uuid4()) for _ in range(13))).status_code == 422
 
 
+def test_woocommerce_catalogue_rows_cannot_be_edited_published_or_deleted_in_cms(client: TestClient) -> None:
+    category_id, product_id = uuid4(), uuid4()
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="catalogue-admin", role="admin", is_active=True))
+        session.add(ProductCategory(id=category_id, slug="wp-read-only", name="WooCommerce collection", wordpress_source_id="wp-category-90", is_published=True))
+        session.add(Product(id=product_id, category_id=category_id, slug="wp-read-only-product", name="WooCommerce product", wordpress_source_id="wp-product-90", is_published=True))
+        session.commit()
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "catalogue-admin", "admin@example.test", "Admin", {"email_verified": True}
+    )
+
+    assert client.patch(f"/api/v1/admin/catalogue/products/{product_id}", json={"name": "Local override"}).status_code == 409
+    assert client.post(f"/api/v1/admin/catalogue/products/{product_id}/publish").status_code == 409
+    assert client.delete(f"/api/v1/admin/catalogue/products/{product_id}").status_code == 409
+    assert client.patch(f"/api/v1/admin/catalogue/categories/{category_id}", json={"name": "Local override"}).status_code == 409
+    assert client.post(f"/api/v1/admin/catalogue/categories/{category_id}/publish").status_code == 409
+    assert client.delete(f"/api/v1/admin/catalogue/categories/{category_id}").status_code == 409
+
+
+def test_catalogue_deletes_reject_product_and_home_references(client: TestClient) -> None:
+    category_id, featured_category_id = uuid4(), uuid4()
+    product_id, featured_product_id = uuid4(), uuid4()
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="catalogue-admin", role="admin", is_active=True))
+        session.add_all([
+            ProductCategory(id=category_id, slug="has-products", name="Has products"),
+            ProductCategory(id=featured_category_id, slug="home-category", name="Home category"),
+        ])
+        session.add_all([
+            Product(id=product_id, category_id=category_id, slug="category-product", name="Category product"),
+            Product(id=featured_product_id, category_id=category_id, slug="home-product", name="Home product"),
+        ])
+        session.add(AppConfig(
+            key="home",
+            draft_payload={"featured_product_ids": [str(featured_product_id)], "featured_category_ids": [str(featured_category_id)]},
+            published_payload={"featured_product_ids": [], "featured_category_ids": []},
+        ))
+        session.commit()
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "catalogue-admin", "admin@example.test", "Admin", {"email_verified": True}
+    )
+
+    product_response = client.delete(f"/api/v1/admin/catalogue/products/{featured_product_id}")
+    category_response = client.delete(f"/api/v1/admin/catalogue/categories/{featured_category_id}")
+    dependent_category_response = client.delete(f"/api/v1/admin/catalogue/categories/{category_id}")
+    assert product_response.status_code == 409
+    assert "Home featured products" in product_response.json()["detail"]
+    assert category_response.status_code == 409
+    assert "Home featured collections" in category_response.json()["detail"]
+    assert dependent_category_response.status_code == 409
+    assert "products in this collection" in dependent_category_response.json()["detail"]
+
+
 @pytest.mark.parametrize("query", ["limit=0", "limit=501", "offset=-1", "q=" + ("x" * 121)])
 def test_invalid_catalogue_parameters_are_rejected(client: TestClient, query: str) -> None:
     assert client.get(f"/api/v1/catalogue/products?{query}").status_code == 422
-
