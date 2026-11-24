@@ -1,4 +1,6 @@
 from collections.abc import Iterator
+from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,10 +10,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.api.router as api_router
+from app.core.auth import Identity, get_current_identity
 from app.db.base import Base
 from app.db.session import get_session
 from app.main import app
-from app.models import Product, ProductCategory
+from app.models import AdminAccount, CustomerRequest, Product, ProductCategory
 
 
 @pytest.fixture
@@ -60,6 +63,53 @@ def test_database_outage_does_not_expose_connection_details(client: TestClient, 
     assert response.status_code == 503
     assert response.json() == {"detail": "The database is temporarily unavailable. Please try again."}
     assert "secret-host.internal" not in response.text
+
+
+def test_customer_requests_are_scoped_to_the_verified_identity(client: TestClient) -> None:
+    identity = Identity("customer-a", "a@example.test", "Customer A", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: identity
+    first = client.post("/api/v1/requests/quote", json={"application": "Factory", "equipment_or_load": "Production line"})
+    assert first.status_code == 201
+
+    identity = Identity("customer-b", "b@example.test", "Customer B", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: identity
+    second = client.post("/api/v1/requests/quote", json={"application": "Office", "equipment_or_load": "Server rack"})
+    assert second.status_code == 201
+    rows = client.get("/api/v1/requests").json()
+    assert len(rows) == 1
+    assert rows[0]["id"] == second.json()["id"]
+
+
+def test_content_editor_cannot_read_customer_directory(client: TestClient) -> None:
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="editor-uid", role="content_editor", is_active=True))
+        session.commit()
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "editor-uid", "editor@example.test", "Editor", {"email_verified": True}
+    )
+
+    assert client.get("/api/v1/admin/catalogue/categories").status_code == 200
+    assert client.get("/api/v1/admin/customers").status_code == 403
+
+
+def test_closed_request_cannot_be_reopened_by_admin(client: TestClient) -> None:
+    request_id = uuid4()
+    now = datetime.now(timezone.utc)
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="admin-uid", role="admin", is_active=True))
+        session.add(CustomerRequest(
+            id=request_id, customer_uid="customer-uid", customer_email="customer@example.test",
+            kind="service", status="closed", payload={}, created_at=now, updated_at=now,
+        ))
+        session.commit()
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "admin-uid", "admin@example.test", "Admin", {"email_verified": True}
+    )
+
+    response = client.patch(f"/api/v1/admin/requests/{request_id}", json={"status": "in_review"})
+    assert response.status_code == 409
+    with Session(api_router.engine) as session:
+        assert session.get(CustomerRequest, request_id).status == "closed"
 
 
 def test_empty_catalogue_is_a_real_empty_result(client: TestClient) -> None:
