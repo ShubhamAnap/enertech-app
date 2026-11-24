@@ -1,6 +1,6 @@
 # Build status
 
-Updated 2026-11-23. The project contains the customer app, CMS, API, and Coolify deployment configuration. Live Firebase, Supabase, and WooCommerce accounts are not connected yet.
+Updated 2026-11-24. The project contains the customer app, CMS, API, and Coolify deployment configuration. Source is published to GitHub `main`; live Firebase, Supabase, and WooCommerce behavior is not yet verified.
 
 ## Implemented in the workspace
 
@@ -35,4 +35,5 @@ Updated 2026-11-23. The project contains the customer app, CMS, API, and Coolify
 - Full role/invitation lifecycle, account deletion/retention workflows, and audit export.
 - Live end-to-end verification, Coolify deployment, and Android APK rebuild.
 
-No GitHub push or Coolify deployment has been performed. The workspace has no Firebase or Supabase production data, and the live WooCommerce sync has not run without the read-only consumer credentials.
+No live Coolify deployment or production APK has been verified. The workspace has no access to the production Supabase data or live WooCommerce sync credentials, so these external workflows still need staging validation.
+
