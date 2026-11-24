@@ -1,6 +1,7 @@
 "use client";
 
 import { signOut, type User } from "firebase/auth";
+import Image from "next/image";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, getEffectiveApiBaseUrl, uploadMedia, type AdminAccount, type AuditEvent, type Category, type ContactInquiry, type ContentEnvelope, type CustomerProfile, type CustomerRequest, type KnowledgeArticle, type Product } from "@/lib/api";
 import { getFirebaseAuth } from "@/lib/firebase";
@@ -16,6 +17,7 @@ function textValue(value: unknown): string { return value == null ? "" : typeof 
 function humanize(key: string): string { return key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
 function catalogPrice(product: Product): string { if (product.price_minor == null) return "—"; const digits = productPriceDigits(product); return new Intl.NumberFormat("en-IN", { style: "currency", currency: product.currency_code, minimumFractionDigits: 0, maximumFractionDigits: digits }).format(product.price_minor / (10 ** digits)); }
 function productPriceDigits(product: Pick<Product, "currency_minor_unit">): number { return Math.max(0, Math.min(product.currency_minor_unit, 4)); }
+function BoltMark({ className = "h-4 w-4" }: { className?: string }) { return <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M13 2 4 14h7l-1 8 10-12h-7l1-8Z" /></svg>; }
 function stockLabel(status: Product["stock_status"]): string { return ({ instock: "In stock", outofstock: "Out of stock", onbackorder: "On backorder", unknown: "Not provided" })[status]; }
 function stockBadgeClass(status: Product["stock_status"]): string { return ({ instock: "badge-success", outofstock: "badge-error", onbackorder: "badge-warning", unknown: "badge-ghost" })[status]; }
 const requestTransitions: Record<string, Record<string, string[]>> = {
@@ -442,7 +444,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
               {(["products", "categories", "wordpress"] as Section[]).map((key) => (
                 <li key={key}>
                   <button className={section === key ? "active" : ""} onClick={() => { setSection(key); setMenuOpen(false); }}>
-                    <span aria-hidden="true">{key === "products" ? "◇" : key === "categories" ? "▦" : "⚡"}</span>
+                    <span aria-hidden="true">{key === "products" ? "◇" : key === "categories" ? "▦" : <BoltMark />}</span>
                     <span>{sectionNames[key]}</span>
                   </button>
                 </li>
@@ -536,7 +538,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                 <span aria-hidden="true" className="text-emerald-500 font-bold">●</span>
                 <span><strong>Changes are staged safely.</strong> Save creates a draft; publishing makes it available to the customer app.</span>
               </div>
-              <button className="btn btn-xs btn-ghost text-xs underline" onClick={() => void wordpressSync()}>⚡ Quick Sync WP</button>
+              <button className="btn btn-xs btn-ghost text-xs underline" onClick={() => void wordpressSync()}><BoltMark className="h-3.5 w-3.5" /> Quick Sync WP</button>
             </div>
 
             {notice && <div role="status" className="alert alert-success mb-4 text-sm font-medium">{notice}</div>}
@@ -646,7 +648,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   {/* Actions matching Medusa screenshot */}
                   <div className="flex flex-wrap items-center gap-2">
                     <button className="btn btn-sm btn-outline gap-1.5" onClick={() => void wordpressSync()} title="Pull latest products from WooCommerce">
-                      <span>⚡</span> Import Products
+                      <BoltMark /> Import Products
                     </button>
                     <button className="btn btn-sm btn-outline" onClick={() => void loadCatalogue()}>
                       Refresh
@@ -783,11 +785,11 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                 </td>
                                 <td>
                                   <div className="flex items-center gap-3">
-                                    <div className="w-11 h-11 rounded-lg bg-base-200 border border-base-300 flex items-center justify-center overflow-hidden shrink-0">
+                                    <div className="relative w-11 h-11 rounded-lg bg-base-200 border border-base-300 flex items-center justify-center overflow-hidden shrink-0">
                                       {product.image_url ? (
-                                        <img src={product.image_url} alt={product.name} className="w-full h-full object-contain p-1" loading="lazy" />
+                                        <Image src={product.image_url} alt={product.name} fill sizes="44px" unoptimized className="object-contain p-1" />
                                       ) : (
-                                        <span className="text-sm">⚡</span>
+                                        <BoltMark className="h-4 w-4 text-base-content/40" />
                                       )}
                                     </div>
                                     <div className="min-w-0 max-w-xs md:max-w-sm">
@@ -857,7 +859,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         </tbody>
                       </table>
                       {!filteredProducts.length && (
-                        <Empty title="No products found" detail="Click '⚡ Import Products' above to pull the WooCommerce catalogue, or add one manually." />
+                        <Empty title="No products found" detail="Click ‘Import Products’ above to pull the WooCommerce catalogue, or add one manually." />
                       )}
                     </div>
                   )}
@@ -887,15 +889,17 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                   </span>
                                 )}
                                 {product.image_url ? (
-                                  <img
+                                  <Image
                                     src={product.image_url}
                                     alt={product.name}
-                                    className="max-h-44 max-w-full object-contain p-2 group-hover:scale-105 transition-transform duration-200"
-                                    loading="lazy"
+                                    fill
+                                    sizes="(max-width: 768px) 100vw, 33vw"
+                                    unoptimized
+                                    className="object-contain p-2 group-hover:scale-105 transition-transform duration-200"
                                   />
                                 ) : (
                                   <div className="flex flex-col items-center justify-center text-base-content/40">
-                                    <span className="text-3xl mb-1">⚡</span>
+                                    <BoltMark className="mb-1 h-8 w-8 text-base-content/40" />
                                     <span className="text-xs font-medium">EnerTech Solution</span>
                                   </div>
                                 )}
@@ -965,7 +969,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         })}
                       </div>
                       {!filteredProducts.length && (
-                        <Empty title="No products found" detail="Try a different query or click '⚡ Import Products'." />
+                        <Empty title="No products found" detail="Try a different query or click ‘Import Products’." />
                       )}
                     </div>
                   )}
