@@ -44,4 +44,5 @@ Output: `update.apk` at the workspace root (copied from `apps/mobile/build/app/o
 
 ## Current gate
 
-Firebase and Supabase projects and WooCommerce credentials are not ready, so no live sync, production CMS image, or current APK has been produced. No code has been pushed to GitHub and no Coolify deployment has been made. Configure the values above before creating a staging deployment and verify sign-in, role boundaries, CMS publishing, product sync, widget loading, customer request ownership, backup, and rollback there.
+Source code has been pushed to GitHub `main`; no Coolify deployment, production CMS image, or current APK has been produced. Configure Firebase, Supabase, the Coolify domains and secrets, and optional WooCommerce credentials before creating a staging deployment. Verify sign-in, role boundaries, CMS publishing, product sync, widget loading, customer request ownership, backup, and rollback there.
+
