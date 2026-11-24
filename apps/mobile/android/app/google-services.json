@@ -12,7 +12,20 @@
           "package_name": "com.enertech.enertech_customer"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "423316048940-mrqk68mr7l9qq3sb5539q0md7krmp4ib.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.enertech.enertech_customer",
+            "certificate_hash": "abec76cc32c80ba677b0abc2fc041f17afa7f585"
+          }
+        },
+        {
+          "client_id": "423316048940-e0915dl09gcg428dhffek68o87f5djvt.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAUbtbOGwZwjLLAacs5VZtJKwSZfyNAxW4"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "423316048940-e0915dl09gcg428dhffek68o87f5djvt.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
