@@ -213,4 +213,3 @@ class _LibraryDocument {
   final ProductSummary product;
   final ProductDocument document;
 }
-
