@@ -106,4 +106,3 @@ def require_admin_roles(*roles: str):
         return admin
 
     return dependency
-
