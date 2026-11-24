@@ -67,13 +67,19 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const loadCatalogue = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const [nextCategories, page] = await Promise.all([
-        api<Category[]>(user, "/admin/catalogue/categories?limit=200"),
-        api<{ items: Product[]; total: number }>(user, `/admin/catalogue/products?limit=300&q=${encodeURIComponent(query)}`),
-      ]);
-      setCategories(nextCategories); setProducts(page.items);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load catalogue data."); }
-    finally { setLoading(false); }
+      const catsPromise = api<Category[]>(user, "/admin/catalogue/categories?limit=200").catch((e) => {
+        console.warn("Categories fetch:", e);
+        return [] as Category[];
+      });
+      const prodsPromise = api<{ items: Product[]; total: number }>(user, `/admin/catalogue/products?limit=300&q=${encodeURIComponent(query)}`);
+      const [nextCategories, page] = await Promise.all([catsPromise, prodsPromise]);
+      if (nextCategories.length > 0) setCategories(nextCategories);
+      setProducts(page.items);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load catalogue data.");
+    } finally {
+      setLoading(false);
+    }
   }, [query, user]);
 
   const loadContent = useCallback(async (key: string) => {

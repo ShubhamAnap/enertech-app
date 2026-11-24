@@ -54,7 +54,7 @@ def list_products(
     session: Session = Depends(get_session),
     q: str | None = Query(default=None, min_length=1, max_length=120),
     category: str | None = Query(default=None, min_length=1, max_length=120),
-    limit: int = Query(default=24, ge=1, le=100),
+    limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> ProductPage:
     require_database()

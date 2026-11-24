@@ -41,8 +41,16 @@ export async function api<T>(user: User, path: string, init: RequestInit = {}): 
     cache: "no-store",
   });
   if (!response.ok) {
-    const body = await response.json().catch(() => null) as { detail?: string } | null;
-    throw new Error(body?.detail ?? `Request failed (${response.status}).`);
+    const body = await response.json().catch(() => null) as { detail?: string | Array<{ msg?: string; loc?: string[] }> } | null;
+    let message = `Request failed (${response.status}).`;
+    if (typeof body?.detail === "string") {
+      message = body.detail;
+    } else if (Array.isArray(body?.detail)) {
+      message = body.detail.map((d) => d.msg || JSON.stringify(d)).join(", ");
+    } else if (body?.detail) {
+      message = JSON.stringify(body.detail);
+    }
+    throw new Error(message);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

@@ -392,7 +392,7 @@ class AuditEventPublic(BaseModel):
 
 class ContactInquiryCreate(BaseModel):
     name: str = Field(min_length=2, max_length=180)
-    email: EmailStr
+    email: str = Field(min_length=5, max_length=254)
     phone: str = Field(min_length=7, max_length=24)
     company_name: str | None = Field(default=None, max_length=220)
     subject: str | None = Field(default=None, max_length=220)

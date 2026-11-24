@@ -82,38 +82,51 @@ def _product_payload(product: Product) -> dict[str, object]:
 
 def _product_response(product: Product) -> ProductAdmin:
     draft = _product_payload(product)
+    cat_id = draft.get("category_id") or product.category_id
+    if isinstance(cat_id, str):
+        try:
+            parsed_cat_id = UUID(cat_id)
+        except (ValueError, TypeError):
+            parsed_cat_id = product.category_id
+    elif isinstance(cat_id, UUID):
+        parsed_cat_id = cat_id
+    else:
+        parsed_cat_id = product.category_id
+
+    updated_str = product.updated_at.isoformat() if product.updated_at else datetime.now(timezone.utc).isoformat()
+
     return ProductAdmin(
         id=product.id,
-        category_id=UUID(str(draft["category_id"])),
-        slug=str(draft["slug"]),
-        name=str(draft["name"]),
-        model_code=draft.get("model_code"),
-        summary=draft.get("summary"),
-        description=draft.get("description"),
-        applications=draft.get("applications") or [],
-        features=draft.get("features") or [],
-        specifications=draft.get("specifications") or {},
-        image_url=str(draft["image_url"]) if draft.get("image_url") else None,
-        gallery_images=draft.get("gallery_images") or [],
-        price_minor=draft.get("price_minor"),
-        currency_code=draft.get("currency_code") or "INR",
-        currency_minor_unit=draft.get("currency_minor_unit", 2),
-        stock_status=draft.get("stock_status") or "unknown",
-        stock_quantity=draft.get("stock_quantity"),
-        documents=draft.get("documents") or [],
-        source_reference=draft.get("source_reference"),
-        wordpress_source_id=draft.get("wordpress_source_id"),
-        wordpress_source_url=draft.get("wordpress_source_url"),
+        category_id=parsed_cat_id,
+        slug=str(draft.get("slug") or product.slug),
+        name=str(draft.get("name") or product.name),
+        model_code=draft.get("model_code") or product.model_code,
+        summary=draft.get("summary") or product.summary,
+        description=draft.get("description") or product.description,
+        applications=draft.get("applications") or product.applications or [],
+        features=draft.get("features") or product.features or [],
+        specifications=draft.get("specifications") or product.specifications or {},
+        image_url=str(draft["image_url"]) if draft.get("image_url") else product.image_url,
+        gallery_images=draft.get("gallery_images") or product.gallery_images or [],
+        price_minor=draft.get("price_minor") if draft.get("price_minor") is not None else product.price_minor,
+        currency_code=draft.get("currency_code") or product.currency_code or "INR",
+        currency_minor_unit=draft.get("currency_minor_unit", product.currency_minor_unit if product.currency_minor_unit is not None else 2),
+        stock_status=draft.get("stock_status") or product.stock_status or "instock",
+        stock_quantity=draft.get("stock_quantity") if draft.get("stock_quantity") is not None else product.stock_quantity,
+        documents=draft.get("documents") or product.documents or [],
+        source_reference=draft.get("source_reference") or product.source_reference,
+        wordpress_source_id=draft.get("wordpress_source_id") or product.wordpress_source_id,
+        wordpress_source_url=draft.get("wordpress_source_url") or product.wordpress_source_url,
         is_published=product.is_published,
         has_draft=product.draft_data is not None,
-        updated_at=product.updated_at.isoformat(),
+        updated_at=updated_str,
     )
 
 
 @router.get("/categories", response_model=list[CategoryAdmin])
 def admin_categories(
     q: str | None = Query(default=None, max_length=120),
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
     _admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),
@@ -231,7 +244,7 @@ def unpublish_category(
 def admin_products(
     q: str | None = Query(default=None, max_length=120),
     category: str | None = Query(default=None, max_length=120),
-    limit: int = Query(default=24, ge=1, le=100),
+    limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
     _admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),

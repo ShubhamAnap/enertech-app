@@ -444,7 +444,10 @@ def sync_woocommerce_catalogue(
         session.commit()
     except IntegrityError as error:
         session.rollback()
-        raise HTTPException(status_code=409, detail="WooCommerce sync hit a duplicate product or category slug; correct the source slugs and sync again") from error
+        raise HTTPException(status_code=409, detail=f"Duplicate slug or constraint during sync: {error}") from error
+    except Exception as error:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Database commit error during sync: {error}") from error
     return {
         "source": "woocommerce",
         "created": created,
