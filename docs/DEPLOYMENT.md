@@ -19,7 +19,7 @@ The Android build reads `apps/mobile/.env`; it may contain public Firebase clien
 Configure server runtime secrets in Coolify:
 
 - Supabase: `SUPABASE_DATABASE_URL` with TLS, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_PUBLIC_MEDIA_BUCKET` (create a public `enertech-public` bucket for app images).
-- Firebase server: `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, and `BOOTSTRAP_SUPER_ADMIN_UIDS` for the first super-admin.
+- Firebase server: `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, and `BOOTSTRAP_SUPER_ADMIN_UIDS` for first login. After signing in, create the same UID as an active `super_admin` in CMS → Admin access, then remove it from `BOOTSTRAP_SUPER_ADMIN_UIDS` in Coolify and redeploy the API. Keep at least one active super-admin account.
 - API: `API_CORS_ORIGINS` with the exact CMS origin.
 - WooCommerce server: `WORDPRESS_API_BASE_URL=https://enertechups.com/wp-json`, read-only `WORDPRESS_CONSUMER_KEY` and `WORDPRESS_CONSUMER_SECRET`, and the routes/mappings in `infra/coolify/.env.example`.
 - Chat widget server: `CHAT_ALLOWED_HOSTS`, `CHAT_WIDGET_SCRIPT_URL`, and `CHAT_WIDGET_PUBLIC_KEY`. Only use a provider-designated public embed key here; the app-config endpoint returns it to app clients while chat is enabled and published. Never configure a private/server API key.
