@@ -32,6 +32,8 @@ Use Supabase backups and verify a restore before production. Configure the CMS d
 
 After Firebase and the production API URL are configured in ignored `apps/mobile/.env`, run from the workspace root. Set `API_BASE_URL` to the Coolify API service's public HTTPS domain followed by `/api/v1` (for example, `https://api.example.com/api/v1`; replace the example with the real API domain). You can find the domain in Coolify under the EnerTech API service's Domains settings and confirm the host with `/health/ready`.
 
+The mobile `.env` also requires `GOOGLE_SERVER_CLIENT_ID` for Google sign-in. Enable Google as a Firebase Authentication provider, then use the Web OAuth client ID configured for that Firebase project (Firebase Console → Authentication → Google provider, or the matching Web client under Google Cloud Console → APIs & Services → Credentials). Do not use the Android OAuth client ID for this value.
+
 Release builds also require the existing production upload/release keystore. Set `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` in the build environment; keep passwords out of mobile `.env` and source control. Use the same signing identity as the app already distributed to customers. The build stops if the endpoint is local or HTTPS configuration/signing values are missing.
 
 Run from the workspace root:
