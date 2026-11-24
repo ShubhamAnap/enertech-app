@@ -5,7 +5,6 @@ import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 import 'chat_support_screen.dart';
 import 'contact_inquiry_screen.dart';
-import 'equipment_screen.dart';
 import 'information_library_screen.dart';
 import 'service_request_screen.dart';
 
@@ -279,7 +278,7 @@ class SupportScreen extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 19),
-          const SectionTitle(title: 'My equipment & service'),
+          const SectionTitle(title: 'Service resources'),
           const SizedBox(height: 8),
           Card(
             child: Column(
@@ -292,17 +291,6 @@ class SupportScreen extends StatelessWidget {
                 ),
                 const Divider(height: 1, indent: 56),
                 _SupportRow(
-                  icon: Icons.electrical_services_outlined,
-                  title: 'My registered equipment',
-                  detail: 'Products and manuals',
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const EquipmentScreen(),
-                    ),
-                  ),
-                ),
-                const Divider(height: 1, indent: 56),
-                _SupportRow(
                   icon: Icons.menu_book_outlined,
                   title: 'Manuals & documents',
                   detail: 'Approved product documentation',
@@ -311,20 +299,6 @@ class SupportScreen extends StatelessWidget {
                       builder: (_) => const InformationLibraryScreen(
                         title: 'Manuals & documents',
                         icon: Icons.menu_book_outlined,
-                      ),
-                    ),
-                  ),
-                ),
-                const Divider(height: 1, indent: 56),
-                _SupportRow(
-                  icon: Icons.verified_user_outlined,
-                  title: 'Warranty & AMC',
-                  detail: 'Published coverage documents',
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const InformationLibraryScreen(
-                        title: 'Warranty & AMC',
-                        icon: Icons.verified_user_outlined,
                       ),
                     ),
                   ),
@@ -496,3 +470,4 @@ class _SupportRow extends StatelessWidget {
     ),
   );
 }
+
