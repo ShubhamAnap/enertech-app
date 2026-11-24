@@ -3,6 +3,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -38,6 +39,27 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
 def test_health_endpoints(client: TestClient) -> None:
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/api/v1/health/ready").json() == {"status": "ready"}
+
+
+def test_database_outage_does_not_expose_connection_details(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.db.session as database_session
+
+    class BrokenSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, *_args, **_kwargs):
+            raise OperationalError("SELECT 1", {}, Exception("secret-host.internal password rejected"))
+
+    monkeypatch.setattr(database_session, "SessionLocal", lambda: BrokenSession())
+    app.dependency_overrides.pop(get_session, None)
+    response = client.get("/api/v1/health/ready")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "The database is temporarily unavailable. Please try again."}
+    assert "secret-host.internal" not in response.text
 
 
 def test_empty_catalogue_is_a_real_empty_result(client: TestClient) -> None:
@@ -80,3 +102,4 @@ def test_catalogue_accepts_cms_max_page_size(client: TestClient) -> None:
 @pytest.mark.parametrize("query", ["limit=0", "limit=501", "offset=-1", "q=" + ("x" * 121)])
 def test_invalid_catalogue_parameters_are_rejected(client: TestClient, query: str) -> None:
     assert client.get(f"/api/v1/catalogue/products?{query}").status_code == 422
+
