@@ -18,13 +18,13 @@ The Android build reads `apps/mobile/.env`; it may contain public Firebase clien
 
 Configure server runtime secrets in Coolify:
 
-- Supabase: `SUPABASE_DATABASE_URL` with TLS, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_PUBLIC_MEDIA_BUCKET` (create a public `enertech-public` bucket for app images).
-- Firebase server: `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, and `BOOTSTRAP_SUPER_ADMIN_UIDS` for first login. After signing in, create the same UID as an active `super_admin` in CMS → Admin access, then remove it from `BOOTSTRAP_SUPER_ADMIN_UIDS` in Coolify and redeploy the API. Keep at least one active super-admin account.
+- Supabase: `SUPABASE_DATABASE_URL` with TLS, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY`. Create a public `enertech-public` bucket for app images; the API uses that bucket name by default, so no bucket-name variable is needed.
+- Firebase server: `FIREBASE_PROJECT_ID`, runtime-only `FIREBASE_SERVICE_ACCOUNT_JSON`, and `BOOTSTRAP_SUPER_ADMIN_UIDS` for first login. The service-account JSON is not needed to build either image; API readiness remains unhealthy in production until the Firebase project ID and service credential are present at runtime. After signing in, create the same UID as an active `super_admin` in CMS → Admin access, then remove it from `BOOTSTRAP_SUPER_ADMIN_UIDS` in Coolify and redeploy the API. Keep at least one active super-admin account.
 - API: `API_CORS_ORIGINS` with the exact CMS origin.
-- WooCommerce server: `WORDPRESS_API_BASE_URL=https://enertechups.com/wp-json`, read-only `WORDPRESS_CONSUMER_KEY` and `WORDPRESS_CONSUMER_SECRET`, and the routes/mappings in `infra/coolify/.env.example`.
-- Chat widget server: `CHAT_ALLOWED_HOSTS`, `CHAT_WIDGET_SCRIPT_URL`, and `CHAT_WIDGET_PUBLIC_KEY`. Only use a provider-designated public embed key here; the app-config endpoint returns it to app clients while chat is enabled and published. Never configure a private/server API key.
+- WooCommerce is optional. If you use Import Products, set `WORDPRESS_API_BASE_URL=https://enertechups.com/wp-json` and read-only `WORDPRESS_CONSUMER_KEY` / `WORDPRESS_CONSUMER_SECRET`. The standard WooCommerce routes and field mappings are built-in defaults; add no route or mapping variables unless the store schema differs.
+- Chat widget is optional. If enabled, configure `CHAT_ALLOWED_HOSTS`, `CHAT_WIDGET_SCRIPT_URL`, and `CHAT_WIDGET_PUBLIC_KEY`. Only use a provider-designated public embed key here; the app-config endpoint returns it to app clients while chat is enabled and published. Never configure a private/server API key.
 
-The CMS image build requires the public build values `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID`, and `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`. Production builds require an HTTPS API URL. For temporary Coolify `sslip.io` testing only, set `ALLOW_HTTP_TEST_API=true`; this permits HTTP only when the API hostname ends in `.sslip.io`. Leave it false for production. Coolify-generated `sslip.io` URLs use HTTP, so this test deployment cannot be used for a production APK. Changing these values requires rebuilding the CMS image. They are not server credentials.
+The CMS image build requires `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_APP_ID`, and `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`. Compose supplies `NEXT_PUBLIC_FIREBASE_PROJECT_ID` from `FIREBASE_PROJECT_ID`; do not create a duplicate project-ID variable. Production builds require an HTTPS API URL. For temporary Coolify `sslip.io` testing only, add `ALLOW_HTTP_TEST_API=true`; omit it in production. These public client values require rebuilding the CMS image and are not server credentials.
 
 Use Supabase backups and verify a restore before production. Configure the CMS domain/TLS, firewall, monitoring, retention, and rollback process in Coolify before launch.
 
@@ -47,4 +47,3 @@ Output: `update.apk` at the workspace root (copied from `apps/mobile/build/app/o
 ## Current gate
 
 Source code has been pushed to GitHub `main`; no Coolify deployment, production CMS image, or current APK has been produced. Configure Firebase, Supabase, the Coolify domains and secrets, and optional WooCommerce credentials before creating a staging deployment. Verify sign-in, role boundaries, CMS publishing, product sync, widget loading, customer request ownership, backup, and rollback there.
-
