@@ -42,7 +42,7 @@ Run from the workspace root:
 infra\build-mobile.ps1
 ```
 
-Output: `update.apk` at the workspace root (copied from `apps/mobile/build/app/outputs/flutter-apk/app-release.apk`). The script stops if required public Firebase/API values are missing, the API URL is not HTTPS, or server-only values appear in the mobile environment. Production release signing and package identity still need EnerTech-owned decisions.
+Output: `update.apk` at the workspace root (copied from `apps/mobile/build/app/outputs/flutter-apk/app-release.apk`). The script stops if required public Firebase/API values are missing, the API URL is not HTTPS, or server-only values appear in the mobile environment. Before distribution, confirm `com.enertech.enertech_customer` matches the package ID of the app already distributed to customers and use that app's existing signing key.
 
 ## Current gate
 
