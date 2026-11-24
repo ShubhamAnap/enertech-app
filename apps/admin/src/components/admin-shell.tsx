@@ -842,13 +842,13 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                         PDF
                                       </a>
                                     )}
-                                    <button className="btn btn-ghost btn-xs" onClick={() => editProduct(product)} title="Edit">
+                                    <button className="btn btn-ghost btn-xs" disabled={Boolean(product.wordpress_source_id)} onClick={() => editProduct(product)} title={product.wordpress_source_id ? "Managed by WooCommerce; edit it there, then sync again" : "Edit"}>
                                       Edit
                                     </button>
                                     <button className="btn btn-ghost btn-xs" disabled={Boolean(product.wordpress_source_id)} title={product.wordpress_source_id ? "Managed by WooCommerce; change publication in WordPress" : product.is_published ? "Unpublish" : "Publish"} onClick={() => product.is_published ? void unpublish(`/admin/catalogue/products/${product.id}/unpublish`) : void publish(`/admin/catalogue/products/${product.id}/publish`)}>
                                       {product.is_published ? "Unpublish" : "Publish"}
                                     </button>
-                                    <button className="btn btn-ghost btn-xs text-error" onClick={() => deleteProductItem(product.id, product.name)} title="Delete">
+                                    <button className="btn btn-ghost btn-xs text-error" disabled={Boolean(product.wordpress_source_id)} onClick={() => deleteProductItem(product.id, product.name)} title={product.wordpress_source_id ? "Managed by WooCommerce; remove it there, then sync again" : "Delete"}>
                                       Delete
                                     </button>
                                   </div>
@@ -942,8 +942,10 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                       </a>
                                     )}
                                     <button
+                                      disabled={Boolean(product.wordpress_source_id)}
                                       onClick={() => editProduct(product)}
                                       className="btn btn-xs btn-outline gap-1 h-7 min-h-7 px-2 font-medium border-base-300 hover:bg-base-200"
+                                      title={product.wordpress_source_id ? "Managed by WooCommerce; edit it there, then sync again" : "Edit"}
                                     >
                                       ✎ Edit
                                     </button>
@@ -956,8 +958,10 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                       {product.is_published ? "Unpublish" : "Publish"}
                                     </button>
                                     <button
+                                      disabled={Boolean(product.wordpress_source_id)}
                                       onClick={() => deleteProductItem(product.id, product.name)}
                                       className="btn btn-xs btn-outline btn-error gap-1 h-7 min-h-7 px-2 font-medium hover:text-white"
+                                      title={product.wordpress_source_id ? "Managed by WooCommerce; remove it there, then sync again" : "Delete"}
                                     >
                                       🗑 Delete
                                     </button>
@@ -1012,11 +1016,11 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                               </td>
                               <td className="text-right">
                                 <div className="flex items-center justify-end gap-1">
-                                  <button className="btn btn-ghost btn-xs" onClick={() => editCategory(category)}>Edit</button>
+                                  <button className="btn btn-ghost btn-xs" disabled={Boolean(category.wordpress_source_id)} onClick={() => editCategory(category)} title={category.wordpress_source_id ? "Managed by WooCommerce; edit it there, then sync again" : "Edit"}>Edit</button>
                                   <button className="btn btn-ghost btn-xs" disabled={Boolean(category.wordpress_source_id)} title={category.wordpress_source_id ? "Managed by WooCommerce; change publication in WordPress" : category.is_published ? "Unpublish" : "Publish"} onClick={() => category.is_published ? void unpublish(`/admin/catalogue/categories/${category.id}/unpublish`) : void publish(`/admin/catalogue/categories/${category.id}/publish`)}>
                                     {category.is_published ? "Unpublish" : "Publish"}
                                   </button>
-                                  <button className="btn btn-ghost btn-xs text-error" onClick={() => deleteCategoryItem(category.id, category.name)}>Delete</button>
+                                  <button className="btn btn-ghost btn-xs text-error" disabled={Boolean(category.wordpress_source_id)} onClick={() => deleteCategoryItem(category.id, category.name)} title={category.wordpress_source_id ? "Managed by WooCommerce; remove it there, then sync again" : "Delete"}>Delete</button>
                                 </div>
                               </td>
                             </tr>
@@ -1843,7 +1847,7 @@ function ContentField({ field, value, categories, products, onChange }: { field:
     const options = (field === "featured_category_ids" ? categories : products).filter((item) => item.is_published);
     const selected = new Set((Array.isArray(value) ? value : []).filter((item: unknown): item is string => typeof item === "string"));
     const label = field === "featured_category_ids" ? "Featured collections" : "Featured products";
-    return <fieldset className="form-control gap-2 sm:col-span-2"><legend className="font-semibold">{label}</legend><p className="text-xs text-base-content/60">Select up to 12. Leave all unchecked to show every published {field === "featured_category_ids" ? "collection" : "product"} on Home.</p><div className="grid max-h-56 gap-1 overflow-y-auto rounded-lg border border-base-300 p-2 sm:grid-cols-2">{options.length ? options.map((item) => <label key={item.id} className="label cursor-pointer justify-start gap-2 rounded-md px-2 py-1"><input className="checkbox checkbox-sm checkbox-primary" type="checkbox" checked={selected.has(item.id)} disabled={!selected.has(item.id) && selected.size >= 12} onChange={(event) => { const next = new Set(selected); if (event.target.checked) next.add(item.id); else next.delete(item.id); onChange([...next]); }} /><span className="label-text">{item.name}</span></label>) : <span className="p-2 text-xs text-base-content/60">Publish items in the catalogue first.</span>}</div></fieldset>;
+    return <fieldset className="form-control gap-2 sm:col-span-2"><legend className="font-semibold">{label}</legend><p className="text-xs text-base-content/60">Select up to 12. Leave all unchecked to show every published {field === "featured_category_ids" ? "collection" : "product"} on Home.</p><div className="grid max-h-56 gap-1 overflow-y-auto rounded-lg border border-base-300 p-2 sm:grid-cols-2">{options.length ? options.map((item) => <label key={item.id} className="label cursor-pointer justify-start gap-2 rounded-md px-2 py-1"><input className="checkbox checkbox-sm checkbox-primary" type="checkbox" checked={selected.has(item.id)} disabled={!selected.has(item.id) && selected.size >= 12} onChange={(event) => { const next = new Set(selected); if (event.target.checked) next.add(item.id); else next.delete(item.id); onChange([...next]); }} /><span className="label-text">{item.name}</span></label>) : <span className="p-2 text-xs text-base-content/60">Publish items in the catalogue first.</span>}</div>{selected.size >= 12 && <span className="label-text-alt">Maximum of 12 selected.</span>}</fieldset>;
   }
   if (Array.isArray(value)) return <label className="form-control gap-1 sm:col-span-2"><span className="label-text font-semibold">{humanize(field)} · one per line</span><textarea className="textarea textarea-bordered min-h-20" value={value.join("\n")} onChange={(event) => onChange(event.target.value.split("\n").map((item) => item.trim()).filter(Boolean))} /></label>;
   const choices: Record<string, string[]> = { hero_cta_target: ["products", "solution_finder", "quote", "support"], integration: ["iframe", "hosted_widget"] };
