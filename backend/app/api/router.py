@@ -13,6 +13,7 @@ from app.api.media import router as media_router
 from app.api.app_content import router as app_content_router
 from app.api.wordpress import router as wordpress_router
 from app.core.auth import AdminIdentity, get_current_admin
+from app.core.config import get_settings
 from app.db.session import engine, get_session
 from app.models import Product, ProductCategory
 from app.schemas.catalogue import CategoryPublic, ProductPage, ProductPublic
@@ -40,6 +41,11 @@ def require_database() -> None:
 
 @router.get("/health/ready", tags=["health"])
 def readiness(session: Session = Depends(get_session)) -> dict[str, str]:
+    settings = get_settings()
+    if settings.app_env.lower() == "production" and not (
+        settings.firebase_project_id.strip() and settings.firebase_service_account_json.strip()
+    ):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Firebase Authentication is not configured")
     session.execute(select(1))
     return {"status": "ready"}
 
@@ -94,4 +100,3 @@ def get_product(slug: str, session: Session = Depends(get_session)) -> Product:
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     return product
-
