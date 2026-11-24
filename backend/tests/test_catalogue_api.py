@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.api.router as api_router
+import app.core.auth as auth
 from app.core.auth import Identity, get_current_identity
 from app.db.base import Base
 from app.db.session import get_session
@@ -110,6 +112,33 @@ def test_closed_request_cannot_be_reopened_by_admin(client: TestClient) -> None:
     assert response.status_code == 409
     with Session(api_router.engine) as session:
         assert session.get(CustomerRequest, request_id).status == "closed"
+
+
+def test_bootstrap_admin_role_and_deactivation_follow_managed_account(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(auth, "get_settings", lambda: SimpleNamespace(bootstrap_admin_uids={"bootstrap-uid"}))
+    identity = Identity("bootstrap-uid", "bootstrap@example.test", "Bootstrap", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: identity
+    assert client.get("/api/v1/admin/session").json()["role"] == "super_admin"
+
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="bootstrap-uid", role="admin", is_active=True))
+        session.add(AdminAccount(firebase_uid="other-super", role="super_admin", is_active=True))
+        session.commit()
+
+    assert client.get("/api/v1/admin/session").json()["role"] == "admin"
+    assert client.get("/api/v1/admin/accounts").status_code == 403
+
+    identity = Identity("other-super", "other@example.test", "Other Super", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: identity
+    updated = client.put("/api/v1/admin/accounts/bootstrap-uid", json={
+        "firebase_uid": "bootstrap-uid", "email": "bootstrap@example.test",
+        "display_name": "Bootstrap", "role": "admin", "is_active": False,
+    })
+    assert updated.status_code == 200
+
+    identity = Identity("bootstrap-uid", "bootstrap@example.test", "Bootstrap", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: identity
+    assert client.get("/api/v1/admin/session").status_code == 403
 
 
 def test_empty_catalogue_is_a_real_empty_result(client: TestClient) -> None:
