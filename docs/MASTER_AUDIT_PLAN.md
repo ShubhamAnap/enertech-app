@@ -17,6 +17,7 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 - [x] Stop treating failed quote/service POSTs as successful local submissions; only API-confirmed requests appear in My Requests, preventing cross-account offline-request leakage.
 - [x] Preserve deliberately cleared values and empty arrays when CMS product drafts are returned.
 - [x] Avoid returning exception details and internal configuration in generic API 500 responses.
+- [x] Avoid returning database connection exception details in API 503 responses; return a retryable generic message while retaining server-side logs.
 - [x] Validate featured collection/product references when publishing Home content.
 - [x] Remove the fixed demo customer credentials and offline-auth bypass from the app entry screen.
 - [x] Remove the duplicate account-tab sign-in/sign-up form so all customer authentication goes through the verified-email entry flow.
@@ -54,7 +55,8 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 - [x] Remove hard-coded company phone/email values from app screens; contact data comes from the published CMS configuration.
 - [x] Connect published product document links to a searchable mobile information library; private media/manual access control is still open.
 - [ ] Decide and implement notification behavior; the former home bell now opens My Requests, and there is no notification backend.
-- [ ] Replace registered-equipment, warranty/AMC, and service-history placeholder screens with supported flows, or remove those entry points until the workflows exist.
+- [x] Remove the unimplemented equipment-registration entry point and the incorrectly categorized warranty/AMC link; the current document model cannot verify coverage type.
+- [ ] Implement registered-equipment ownership, warranty/AMC coverage, and service-history workflows after the business rules and source of truth are confirmed.
 - [x] Wire the contact-inquiry API to the customer support form and admin queue with verified-account and database-backed rate limits.
 - [x] Confirm every editable Home/Solution Finder/Contact/Brand/FAQ field is visible in the app and document unsupported fields; Home search/intent copy and Brand support icon are now connected, while provider-specific chat scripting remains external.
 - [x] Trace the current CMS app-content fields against their mobile consumers; the concrete gaps are listed below.
@@ -89,7 +91,7 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 6. Home featured-item configuration was a free-text UUID list; category/product selectors are now implemented.
 7. Draft API responses used truthy fallback logic, making cleared product fields appear unchanged in the CMS.
 8. Generic API errors returned raw exception messages to clients.
-9. App sections exist as placeholders (registered equipment and document/warranty library); the CMS chat embed URL now opens in-app, but provider-specific scripting and human handoff are not configured.
+9. Registered-equipment and warranty/AMC entry points implied unsupported workflows and, for warranty, showed generic product documents; those links have been removed until records and document types are modeled. The CMS chat URL now opens in-app, but provider-specific scripting and human handoff are not configured.
 10. The app's demo sign-in used fixed credentials and enabled an offline bypass when Firebase failed; the duplicate account-tab auth path also skipped email verification. These paths have been removed.
 11. CMS analytics and integration status presented fabricated historical counts and connectivity; these have been removed and replaced with accurate snapshots/setup notes.
 12. The former chat key in the Coolify environment example was non-empty and was sent to public clients. The template now uses a blank public-embed-key name; revoke the previous value.
@@ -127,7 +129,7 @@ The supplied UI/UX blueprint lists these customer journeys. Current source statu
 | Quotation document/detail and customer acceptance | Not implemented; quote records stop at inquiry/status |
 | Service request detail timeline and confirmed appointment | Partial; status/note tracking exists, no timeline/appointment model |
 | Human agent handoff | CMS allowlisted HTTPS handoff action is wired; live provider script/key and agent availability still need staging validation |
-| Registered equipment, warranty/AMC, service history | Placeholder screens; no backend model or CMS workflows |
+| Registered equipment, warranty/AMC, service history | Not available in the app until verified record models and workflows exist; misleading entry points removed |
 | Manual/document library search | Searchable published product documents are connected; no CMS-managed private manuals/coverage records exist |
 | Addresses, notifications, settings/consent/privacy | Not implemented |
 
@@ -147,3 +149,4 @@ CMS app-content parity checked from source:
 - This document records source-level findings. No live service behavior can be confirmed without the external project credentials and source mappings.
 - Visual/device QA remains open. The UI/UX audit skill search utility was unavailable because Python launchers are not installed in the host environment; its built-in accessibility, touch-target, responsive-layout, form-feedback, and safe-area criteria were used as a fallback.
 - Local checks: CMS ESLint completed with two `@next/next/no-img-element` warnings and no errors; TypeScript `--noEmit` and Next production build passed, including the explicit `sslip.io` HTTP test-mode build and checks that non-sslip HTTP is rejected; the full backend suite passed (8 tests), Python compilation passed, and Alembic offline SQL generation compiled through `6f3a1f8d2c70`; Flutter `analyze` and all six app tests passed, including product comparison rendering/removal, selection limits, and cached category-slug filtering. The Android release guard correctly stopped because the configured API is emulator-local; release signing requires the existing production keystore credentials. No emulator/device is available, so there is no installed-device visual verification. No live database migration or staging deployment was run.
+
