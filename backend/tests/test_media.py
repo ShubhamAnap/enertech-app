@@ -58,4 +58,3 @@ def test_media_upload_rejects_files_over_the_size_limit(monkeypatch) -> None:
         asyncio.run(media.upload_media(upload, session=Mock(), admin=admin))
 
     assert error.value.status_code == 413
-
