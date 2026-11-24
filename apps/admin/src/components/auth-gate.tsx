@@ -200,4 +200,3 @@ export default function AuthGate({ children }: { children: (user: User, role: st
     </main>
   );
 }
-
