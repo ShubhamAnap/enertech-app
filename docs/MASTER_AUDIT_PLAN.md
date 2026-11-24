@@ -70,7 +70,8 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 ## Priority 2 — Operational and product completeness
 
 - [ ] Define account invitation/deactivation, customer deletion/retention, data export, privacy, and audit-retention policies.
-- [ ] Model registered equipment, ownership verification, warranty/AMC, service history, attachments, and notification delivery after the business rules and source of truth are confirmed.
+- [ ] Implement secure customer attachments for service requests: the app's “Add photos or video” control is currently disabled and disclosed as unavailable. Agree accepted types, size/count limits, privacy, retention, and CMS access; upload through an authenticated API to private storage and expose attachments only to the request owner and authorized staff.
+- [ ] Model registered equipment, ownership verification, warranty/AMC, service history, and notification delivery after the business rules and source of truth are confirmed.
 - [ ] Add a CMS-managed public/private manual library with authorization rules for private files.
 - [x] Add request text/status filters, assignment options limited to active CMS administrators, and backend-enforced status transitions.
 - [ ] Build complete RFQ-to-quotation workflow including quote creation, revisions, documents, customer review, and acceptance.
