@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import httpx
+import pytest
+from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 
 from app.api import media
@@ -41,4 +43,19 @@ def test_media_upload_uses_async_storage_request(monkeypatch) -> None:
     assert result.size_bytes == len(b"\x89PNG\r\n\x1a\ncontent")
     session.add.assert_called_once()
     session.commit.assert_called_once()
+
+
+def test_media_upload_rejects_files_over_the_size_limit(monkeypatch) -> None:
+    monkeypatch.setattr(media, "get_settings", lambda: SimpleNamespace(
+        supabase_url="https://storage.example.test",
+        supabase_service_role_key="test-server-key",
+        supabase_public_media_bucket="enertech-public",
+    ))
+    upload = UploadFile(filename="too-large.png", file=BytesIO(b"\x89PNG\r\n\x1a\n" + b"x" * media.MAX_FILE_BYTES))
+    admin = AdminIdentity(uid="cms-admin", email="admin@example.test", name="CMS Admin", role="super_admin")
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(media.upload_media(upload, session=Mock(), admin=admin))
+
+    assert error.value.status_code == 413
 
