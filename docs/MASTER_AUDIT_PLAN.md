@@ -20,6 +20,7 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 - [x] Avoid returning database connection exception details in API 503 responses; return a retryable generic message while retaining server-side logs.
 - [x] Keep Supabase Storage uploads asynchronous so a slow media request does not block the API event loop.
 - [x] Ignore stale CMS role-verification responses after a Firebase account changes; abort the previous check before accepting another account's role.
+- [x] Keep the CMS container port internal so public requests enter through Coolify's HTTPS proxy instead of bypassing it on port 3000.
 - [x] Validate featured collection/product references when publishing Home content.
 - [x] Remove the fixed demo customer credentials and offline-auth bypass from the app entry screen.
 - [x] Remove the duplicate account-tab sign-in/sign-up form so all customer authentication goes through the verified-email entry flow.
