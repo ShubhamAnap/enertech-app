@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import AdminIdentity, Identity, get_current_identity, require_admin_roles
 from app.db.session import get_session
-from app.models import AuditEvent, CustomerRequest
-from app.schemas.cms import CustomerRequestAdmin, CustomerRequestPublic, CustomerRequestUpdate, QuoteRequestWrite, ServiceRequestWrite
+from app.models import AuditEvent, CustomerRequest, ContactInquiry
+from app.schemas.cms import CustomerRequestAdmin, CustomerRequestPublic, CustomerRequestUpdate, QuoteRequestWrite, ServiceRequestWrite, ContactInquiryCreate, ContactInquiryAdmin, ContactInquiryUpdate
 
 router = APIRouter(tags=["customer requests"])
 ADMIN_ROLES = ("content_editor", "admin", "super_admin")
@@ -131,3 +131,95 @@ def update_request(
     session.commit()
     session.refresh(record)
     return _to_admin(record)
+
+
+@router.post("/requests/contact-inquiry", status_code=status.HTTP_201_CREATED, response_model=dict[str, object])
+def submit_contact_inquiry(
+    body: ContactInquiryCreate,
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    now = datetime.now(timezone.utc)
+    inquiry = ContactInquiry(
+        id=uuid4(),
+        name=body.name,
+        email=body.email,
+        phone=body.phone,
+        company_name=body.company_name,
+        subject=body.subject,
+        message=body.message,
+        inquiry_type=body.inquiry_type,
+        status="new",
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(inquiry)
+    session.commit()
+    return {"id": str(inquiry.id), "status": "received", "message": "Thank you for reaching out. We will get back to you shortly."}
+
+
+@router.get("/admin/contact-inquiries", response_model=list[ContactInquiryAdmin])
+def admin_contact_inquiries(
+    status_filter: str | None = Query(default=None, alias="status", max_length=40),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_session),
+    admin_identity: AdminIdentity = Depends(require_admin_roles(*REQUEST_ROLES)),
+) -> list[ContactInquiryAdmin]:
+    query = select(ContactInquiry)
+    if status_filter:
+        query = query.where(ContactInquiry.status == status_filter)
+    _ = admin_identity
+    records = session.scalars(query.order_by(ContactInquiry.created_at.desc()).limit(limit).offset(offset))
+    return [
+        ContactInquiryAdmin(
+            id=r.id,
+            name=r.name,
+            email=r.email,
+            phone=r.phone,
+            company_name=r.company_name,
+            subject=r.subject,
+            message=r.message,
+            inquiry_type=r.inquiry_type,
+            status=r.status,
+            notes=r.notes,
+            created_at=r.created_at.isoformat(),
+            updated_at=r.updated_at.isoformat(),
+        )
+        for r in records
+    ]
+
+
+@router.patch("/admin/contact-inquiries/{inquiry_id}", response_model=ContactInquiryAdmin)
+def update_contact_inquiry(
+    inquiry_id: UUID,
+    body: ContactInquiryUpdate,
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles(*REQUEST_ROLES)),
+) -> ContactInquiryAdmin:
+    record = session.get(ContactInquiry, inquiry_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Inquiry not found")
+    record.status = body.status
+    if body.notes is not None:
+        record.notes = body.notes
+    record.updated_at = datetime.now(timezone.utc)
+    session.add(AuditEvent(
+        actor_uid=admin.uid, action="contact_inquiry.updated", entity_type="contact_inquiry",
+        entity_id=str(record.id), change_summary={"status": body.status},
+    ))
+    session.commit()
+    session.refresh(record)
+    return ContactInquiryAdmin(
+        id=record.id,
+        name=record.name,
+        email=record.email,
+        phone=record.phone,
+        company_name=record.company_name,
+        subject=record.subject,
+        message=record.message,
+        inquiry_type=record.inquiry_type,
+        status=record.status,
+        notes=record.notes,
+        created_at=record.created_at.isoformat(),
+        updated_at=record.updated_at.isoformat(),
+    )

@@ -28,6 +28,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
+  const [productViewMode, setProductViewMode] = useState<"grid" | "table">("grid");
+  const [selectedProductCategory, setSelectedProductCategory] = useState<string>("all");
   const [categoryForm, setCategoryForm] = useState<typeof emptyCategory | Category>(emptyCategory);
   const [productForm, setProductForm] = useState<typeof emptyProduct | Product>(emptyProduct);
   const [editingCategory, setEditingCategory] = useState<string | null>(null);
@@ -136,7 +138,36 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     return () => window.clearTimeout(timer);
   }, [section]);
 
-  const filteredProducts = products;
+  const filteredProducts = products.filter((p) => {
+    const q = query.trim().toLowerCase();
+    const matchesQuery = !q || p.name.toLowerCase().includes(q) || p.slug.toLowerCase().includes(q) || (p.model_code && p.model_code.toLowerCase().includes(q));
+    const matchesCategory = selectedProductCategory === "all" || p.category_id === selectedProductCategory;
+    return matchesQuery && matchesCategory;
+  });
+
+  async function deleteProductItem(id: string, name: string) {
+    if (!window.confirm(`Are you sure you want to delete "${name}"? This action cannot be undone.`)) return;
+    setError(""); setNotice("");
+    try {
+      await api(user, `/admin/catalogue/products/${id}`, { method: "DELETE" });
+      setNotice(`Product "${name}" deleted successfully.`);
+      await loadCatalogue();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not delete product.");
+    }
+  }
+
+  async function deleteCategoryItem(id: string, name: string) {
+    if (!window.confirm(`Are you sure you want to delete category "${name}"?`)) return;
+    setError(""); setNotice("");
+    try {
+      await api(user, `/admin/catalogue/categories/${id}`, { method: "DELETE" });
+      setNotice(`Category "${name}" deleted successfully.`);
+      await loadCatalogue();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not delete category.");
+    }
+  }
   async function submitCategory(event: FormEvent) {
     event.preventDefault(); setError(""); setNotice("");
     try {
@@ -211,7 +242,259 @@ export default function AdminShell({ user, role }: { user: User; role: string })
         {notice && <div role="status" className="alert alert-success mb-4 text-sm">{notice}</div>}{error && <div role="alert" className="alert alert-error mb-4 text-sm">{error}</div>}
         {section === "overview" && <><div className="page-heading"><div><p className="eyebrow">CONTENT OPERATIONS</p><h1>Platform overview</h1><p>Manage app content and approved catalogue data from one workspace.</p></div></div><div className="metrics-grid">{[["Products", products.length, "Products currently available to the CMS"], ["Categories", categories.length, "Organized product families"], ["Drafts", [...products, ...categories].filter((item) => item.has_draft).length, "Saved changes awaiting review"], ["Signed in as", user.email ?? "Admin", "Firebase authenticated" ]].map(([label, value, foot]) => <article className="card metric-card" key={String(label)}><div className="card-body"><span className="metric-label">{label}</span><strong className="text-2xl text-secondary">{value}</strong><span className="metric-foot">{foot}</span></div></article>)}</div><section className="section-grid"><article className="card panel"><header className="panel-head"><div><h2>Manage app content</h2><p>Update customer facing app sections and publish approved changes.</p></div></header><div className="grid gap-2 p-4 sm:grid-cols-2">{contentSections.map(({ key, title: label }) => <button key={key} className="module-card text-left" onClick={() => setSection(key)}><div><strong>{label}</strong><p>Open draft editor and publication status</p></div><span aria-hidden="true">→</span></button>)}</div></article><article className="card panel"><header className="panel-head"><div><h2>Connected services</h2><p>Configured on the API server</p></div></header><div className="queue-list">{[["Supabase database", "Waiting for project connection"], ["Firebase Authentication", "Current user signed in"], ["WordPress", "Server credentials and product type required"], ["Chat support", "Approved embed URL and host required"]].map(([label, status]) => <div className="queue-row" key={label}><i className="queue-dot"/><div><strong>{label}</strong><span>{status}</span></div></div>)}</div></article></section></>}
         {(section === "products" || section === "categories") && <><div className="page-heading"><div><p className="eyebrow">CATALOGUE MANAGEMENT</p><h1>{title}</h1><p>{section === "products" ? "Edit verified product details and publish changes to the customer app." : "Organize catalogue sections and control which are visible in the app."}</p></div><div className="page-actions"><button className="btn btn-outline" onClick={() => void loadCatalogue()}>Refresh</button><button className="btn btn-primary" onClick={() => { if (section === "products") { setProductForm({ ...emptyProduct, category_id: categories[0]?.id ?? "" }); setEditingProduct(null); setShowProductForm(true); } else { setCategoryForm(emptyCategory); setEditingCategory(null); setShowCategoryForm(true); } }}>{section === "products" ? "+ Add product" : "+ Add category"}</button></div></div>
-          <article className="card panel table-panel"><div className="table-toolbar"><label className="input input-bordered"><span aria-hidden="true">⌕</span><input placeholder={`Search ${section}`} value={query} onChange={(event) => setQuery(event.target.value)} aria-label={`Search ${section}`}/></label><span className="text-xs text-base-content/55">{loading ? "Loading…" : `${section === "products" ? products.length : categories.length} records`}</span></div>{section === "products" ? <div className="overflow-x-auto"><table className="table content-table"><thead><tr><th>Product</th><th>Model</th><th>Price</th><th>Stock</th><th>Status</th><th>Source check</th><th>Actions</th></tr></thead><tbody>{filteredProducts.map((product) => <tr key={product.id}><td><strong className="text-base-content">{product.name}</strong><span className="block text-xs text-base-content/55">{product.summary || product.slug}</span></td><td>{product.model_code || "—"}</td><td>{catalogPrice(product)}</td><td>{stockLabel(product.stock_status)}</td><td><span className={`badge ${product.is_published ? "badge-success" : "badge-ghost"}`}>{product.is_published ? "Published" : "Draft"}</span>{product.has_draft && <span className="badge badge-warning ml-1">Changes</span>}</td><td>{product.source_reference ? "Verified source added" : "Source required"}</td><td><div className="flex gap-1">{product.wordpress_source_id ? <a className="btn btn-ghost btn-xs" href={product.wordpress_source_url || undefined} target="_blank" rel="noreferrer">WooCommerce</a> : <><button className="btn btn-ghost btn-xs" onClick={() => editProduct(product)}>Edit</button>{product.is_published ? <button className="btn btn-ghost btn-xs" onClick={() => void publish(`/admin/catalogue/products/${product.id}/unpublish`)}>Unpublish</button> : <button className="btn btn-primary btn-xs" onClick={() => void publish(`/admin/catalogue/products/${product.id}/publish`)}>Publish</button>}</>}</div></td></tr>)}</tbody></table>{!products.length && <Empty title="No products found" detail="Add approved source data or import a WordPress product as a draft."/>}</div> : <div className="overflow-x-auto"><table className="table content-table"><thead><tr><th>Category</th><th>Slug</th><th>Order</th><th>Status</th><th>Actions</th></tr></thead><tbody>{categories.map((category) => <tr key={category.id}><td><strong className="text-base-content">{category.name}</strong></td><td>{category.slug}</td><td>{category.sort_order}</td><td><span className={`badge ${category.is_published ? "badge-success" : "badge-ghost"}`}>{category.is_published ? "Published" : "Draft"}</span></td><td><div className="flex gap-1">{category.wordpress_source_id ? <span className="badge badge-ghost">WooCommerce</span> : <><button className="btn btn-ghost btn-xs" onClick={() => editCategory(category)}>Edit</button>{category.is_published ? <button className="btn btn-ghost btn-xs" onClick={() => void publish(`/admin/catalogue/categories/${category.id}/unpublish`)}>Unpublish</button> : <button className="btn btn-primary btn-xs" onClick={() => void publish(`/admin/catalogue/categories/${category.id}/publish`)}>Publish</button>}</>}</div></td></tr>)}</tbody></table>{!categories.length && <Empty title="No categories yet" detail="Create a category before adding products."/>}</div>}</article>
+          <article className="card panel table-panel">
+            <div className="table-toolbar flex flex-wrap items-center justify-between gap-3 p-4 border-b border-base-200">
+              <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[280px]">
+                <label className="input input-bordered input-sm flex items-center gap-2 flex-1 max-w-sm">
+                  <span aria-hidden="true">⌕</span>
+                  <input placeholder={`Search ${section}...`} value={query} onChange={(event) => setQuery(event.target.value)} aria-label={`Search ${section}`} />
+                </label>
+                {section === "products" && (
+                  <select
+                    className="select select-bordered select-sm text-xs"
+                    value={selectedProductCategory}
+                    onChange={(e) => setSelectedProductCategory(e.target.value)}
+                  >
+                    <option value="all">All categories ({products.length})</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {section === "products" && (
+                  <div className="join border border-base-300 rounded-lg overflow-hidden">
+                    <button
+                      className={`join-item btn btn-xs px-2.5 ${productViewMode === "grid" ? "btn-active btn-primary" : "btn-ghost"}`}
+                      onClick={() => setProductViewMode("grid")}
+                      title="Grid View"
+                    >
+                      ⊞ Grid
+                    </button>
+                    <button
+                      className={`join-item btn btn-xs px-2.5 ${productViewMode === "table" ? "btn-active btn-primary" : "btn-ghost"}`}
+                      onClick={() => setProductViewMode("table")}
+                      title="Table View"
+                    >
+                      ☰ Table
+                    </button>
+                  </div>
+                )}
+                <span className="text-xs text-base-content/55 font-medium">
+                  {loading ? "Loading…" : `${section === "products" ? filteredProducts.length : categories.length} records`}
+                </span>
+              </div>
+            </div>
+
+            {section === "products" ? (
+              productViewMode === "grid" ? (
+                <div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-4">
+                    {filteredProducts.map((product) => {
+                      const category = categories.find((c) => c.id === product.category_id);
+                      const pdfDoc = product.documents?.find((d) => d.url?.toLowerCase().endsWith(".pdf") || d.title?.toLowerCase().includes("pdf") || d.title?.toLowerCase().includes("datasheet"));
+                      const pdfUrl = pdfDoc?.url || (product.wordpress_source_url?.toLowerCase().endsWith(".pdf") ? product.wordpress_source_url : null);
+                      const mrpPrice = product.price_minor ? new Intl.NumberFormat("en-IN", { style: "currency", currency: product.currency_code, maximumFractionDigits: 0 }).format((product.price_minor * 1.22) / 100) : null;
+
+                      return (
+                        <div
+                          key={product.id}
+                          className="rounded-2xl border border-base-200 bg-base-100 shadow-xs hover:shadow-md transition duration-200 flex flex-col justify-between overflow-hidden group"
+                        >
+                          {/* Image Box */}
+                          <div className="relative bg-[#f4f7fb] dark:bg-base-200 h-52 flex items-center justify-center p-3 overflow-hidden border-b border-base-200">
+                            {product.wordpress_source_id ? (
+                              <span className="absolute top-3 left-3 px-2 py-0.5 text-[11px] font-bold rounded-md bg-[#e0f2fe] text-[#0369a1] border border-[#bae6fd]/60 tracking-wider">
+                                WP
+                              </span>
+                            ) : (
+                              <span className="absolute top-3 left-3 px-2 py-0.5 text-[11px] font-bold rounded-md bg-purple-100 text-purple-700 border border-purple-200 tracking-wider">
+                                CMS
+                              </span>
+                            )}
+                            {product.image_url ? (
+                              <img
+                                src={product.image_url}
+                                alt={product.name}
+                                className="max-h-44 max-w-full object-contain p-2 hover:scale-105 transition-transform duration-200"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div className="flex flex-col items-center justify-center text-base-content/40">
+                                <span className="text-3xl mb-1">⚡</span>
+                                <span className="text-xs font-medium">EnerTech Solution</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Card Content */}
+                          <div className="p-4 flex flex-col flex-1 justify-between gap-3">
+                            <div>
+                              <h3 className="font-bold text-sm text-base-content line-clamp-2 leading-snug" title={product.name}>
+                                {product.name}
+                              </h3>
+                              <p className="font-mono text-[11px] text-base-content/50 truncate mt-1">
+                                {product.model_code || product.slug}
+                              </p>
+                              <p className="text-xs text-base-content/60 font-medium mt-1">
+                                {category?.name || "Battery Inverter"}
+                              </p>
+                            </div>
+
+                            <div>
+                              {/* Price */}
+                              <div className="flex items-baseline gap-2">
+                                <span className="text-[17px] font-extrabold text-base-content tracking-tight">
+                                  {catalogPrice(product)}
+                                </span>
+                                {mrpPrice && (
+                                  <span className="text-xs text-base-content/40 line-through">
+                                    {mrpPrice}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Stock */}
+                              <div className="mt-2">
+                                {product.stock_status === "instock" ? (
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#e6f4ea] text-[#137333]">
+                                    In Stock
+                                  </span>
+                                ) : product.stock_status === "outofstock" ? (
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+                                    Out of Stock
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">
+                                    Available on Request
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Action Buttons */}
+                              <div className="flex items-center gap-1.5 pt-3 mt-3 border-t border-base-200">
+                                {pdfUrl && (
+                                  <a
+                                    href={pdfUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="btn btn-xs btn-outline gap-1 h-7 min-h-7 px-2 font-medium border-base-300 hover:bg-base-200"
+                                  >
+                                    📄 PDF
+                                  </a>
+                                )}
+                                <button
+                                  onClick={() => editProduct(product)}
+                                  className="btn btn-xs btn-outline gap-1 h-7 min-h-7 px-2 font-medium border-base-300 hover:bg-base-200"
+                                >
+                                  ✎ Edit
+                                </button>
+                                <button
+                                  onClick={() => deleteProductItem(product.id, product.name)}
+                                  className="btn btn-xs btn-outline btn-error gap-1 h-7 min-h-7 px-2 font-medium hover:text-white"
+                                >
+                                  🗑 Delete
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {!filteredProducts.length && (
+                    <Empty title="No products found" detail="Try a different search query or click '+ Add product' to create one." />
+                  )}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="table content-table">
+                    <thead>
+                      <tr>
+                        <th>Product</th>
+                        <th>Model</th>
+                        <th>Price</th>
+                        <th>Stock</th>
+                        <th>Status</th>
+                        <th>Source check</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredProducts.map((product) => (
+                        <tr key={product.id}>
+                          <td>
+                            <strong className="text-base-content">{product.name}</strong>
+                            <span className="block text-xs text-base-content/55">{product.summary || product.slug}</span>
+                          </td>
+                          <td>{product.model_code || "—"}</td>
+                          <td>{catalogPrice(product)}</td>
+                          <td>{stockLabel(product.stock_status)}</td>
+                          <td>
+                            <span className={`badge ${product.is_published ? "badge-success" : "badge-ghost"}`}>
+                              {product.is_published ? "Published" : "Draft"}
+                            </span>
+                            {product.has_draft && <span className="badge badge-warning ml-1">Changes</span>}
+                          </td>
+                          <td>{product.source_reference ? "Verified source added" : "Source required"}</td>
+                          <td>
+                            <div className="flex gap-1">
+                              <button className="btn btn-ghost btn-xs" onClick={() => editProduct(product)}>Edit</button>
+                              <button className="btn btn-ghost btn-xs text-error" onClick={() => deleteProductItem(product.id, product.name)}>Delete</button>
+                              {product.is_published ? (
+                                <button className="btn btn-ghost btn-xs" onClick={() => void publish(`/admin/catalogue/products/${product.id}/unpublish`)}>Unpublish</button>
+                              ) : (
+                                <button className="btn btn-primary btn-xs" onClick={() => void publish(`/admin/catalogue/products/${product.id}/publish`)}>Publish</button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!filteredProducts.length && <Empty title="No products found" detail="Add approved source data or import a WordPress product as a draft." />}
+                </div>
+              )
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table content-table">
+                  <thead>
+                    <tr>
+                      <th>Category</th>
+                      <th>Slug</th>
+                      <th>Order</th>
+                      <th>Status</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {categories.map((category) => (
+                      <tr key={category.id}>
+                        <td><strong className="text-base-content">{category.name}</strong></td>
+                        <td>{category.slug}</td>
+                        <td>{category.sort_order}</td>
+                        <td><span className={`badge ${category.is_published ? "badge-success" : "badge-ghost"}`}>{category.is_published ? "Published" : "Draft"}</span></td>
+                        <td>
+                          <div className="flex gap-1">
+                            <button className="btn btn-ghost btn-xs" onClick={() => editCategory(category)}>Edit</button>
+                            <button className="btn btn-ghost btn-xs text-error" onClick={() => deleteCategoryItem(category.id, category.name)}>Delete</button>
+                            {category.is_published ? (
+                              <button className="btn btn-ghost btn-xs" onClick={() => void publish(`/admin/catalogue/categories/${category.id}/unpublish`)}>Unpublish</button>
+                            ) : (
+                              <button className="btn btn-primary btn-xs" onClick={() => void publish(`/admin/catalogue/categories/${category.id}/publish`)}>Publish</button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!categories.length && <Empty title="No categories yet" detail="Create a category before adding products." />}
+              </div>
+            )}
+          </article>
+
         </>}
         {section === "admins" && role === "super_admin" && <><div className="page-heading"><div><p className="eyebrow">ACCESS CONTROL</p><h1>Admin access</h1><p>Grant and change CMS roles using Firebase user IDs. Only super-admins can manage access.</p></div><button className="btn btn-outline" onClick={() => void loadAdmins()}>Refresh</button></div><article className="card panel mb-4"><header className="panel-head"><div><h2>{editingAdminUid ? "Edit CMS account" : "Grant CMS access"}</h2><p>Users must already exist in Firebase Authentication. No public admin signup is available.</p></div></header><form onSubmit={submitAdmin} className="grid gap-3 p-4 sm:grid-cols-2"><label className="form-control gap-1"><span className="label-text">Firebase UID</span><input className="input input-bordered" required minLength={1} maxLength={128} disabled={Boolean(editingAdminUid)} value={adminForm.firebase_uid} onChange={(event) => setAdminForm({ ...adminForm, firebase_uid: event.target.value })}/></label><label className="form-control gap-1"><span className="label-text">Work email</span><input className="input input-bordered" type="email" value={adminForm.email} onChange={(event) => setAdminForm({ ...adminForm, email: event.target.value })}/></label><label className="form-control gap-1"><span className="label-text">Display name</span><input className="input input-bordered" value={adminForm.display_name} onChange={(event) => setAdminForm({ ...adminForm, display_name: event.target.value })}/></label><label className="form-control gap-1"><span className="label-text">Role</span><select className="select select-bordered" value={adminForm.role} onChange={(event) => setAdminForm({ ...adminForm, role: event.target.value as AdminAccount["role"] })}><option value="content_editor">Content editor</option><option value="admin">Admin</option><option value="super_admin">Super-admin</option></select></label><label className="label cursor-pointer justify-start gap-3"><input className="toggle toggle-primary" type="checkbox" checked={adminForm.is_active} onChange={(event) => setAdminForm({ ...adminForm, is_active: event.target.checked })}/><span className="label-text">Account active</span></label><div className="flex items-center gap-2 sm:justify-end"><button type="button" className="btn btn-ghost" onClick={() => { setEditingAdminUid(null); setAdminForm({ firebase_uid: "", email: "", display_name: "", role: "content_editor", is_active: true }); }}>Clear</button><button className="btn btn-primary">{editingAdminUid ? "Save access" : "Grant access"}</button></div></form></article><article className="card panel"><div className="table-toolbar"><span className="text-xs text-base-content/55">{loading ? "Loadinf��y��y�" : adminAccounts.length + " CMS accounts"}</span></div><div className="overflow-x-auto"><table className="table content-table"><thead><tr><th>Administrator</th><th>Firebase UID</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>{adminAccounts.map((account) => <tr key={account.id}><td><strong className="text-base-content">{account.display_name || account.email || "Admin"}</strong><span className="block text-xs text-base-content/55">{account.email || "No email recorded"}</span></td><td className="font-mono text-xs">{account.firebase_uid}</td><td>{account.role.replaceAll("_", " ")}</td><td><span className={account.is_active ? "badge badge-success" : "badge badge-error"}>{account.is_active ? "Active" : "Disabled"}</span></td><td><button className="btn btn-ghost btn-xs" onClick={() => { setEditingAdminUid(account.firebase_uid); setAdminForm({ firebase_uid: account.firebase_uid, email: account.email || "", display_name: account.display_name || "", role: account.role, is_active: account.is_active }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Edit</button></td></tr>)}</tbody></table>{!adminAccounts.length && <Empty title="No administrator records" detail="The initial super-admin can be bootstrapped from the server environment."/>}</div></article></>}
         {section === "audit" && (role === "super_admin" || role === "admin") && <><div className="page-heading"><div><p className="eyebrow">CHANGE HISTORY</p><h1>Audit history</h1><p>Review CMS content changes, request updates, and administrator access events.</p></div><button className="btn btn-outline" onClick={() => void loadAudit()}>Refresh</button></div><article className="card panel"><div className="table-toolbar"><span className="text-xs text-base-content/55">{loading ? "Loadinf��y��y�" : auditEvents.length + " latest events"}</span></div><div className="overflow-x-auto"><table className="table content-table"><thead><tr><th>When</th><th>Action</th><th>Object</th><th>Actor UID</th><th>Change summary</th></tr></thead><tbody>{auditEvents.map((event) => <tr key={event.id}><td>{new Date(event.created_at).toLocaleString()}</td><td><strong className="text-base-content">{event.action.replaceAll("_", " ")}</strong></td><td>{event.entity_type} � {event.entity_id}</td><td className="font-mono text-xs">{event.actor_uid}</td><td className="max-w-64 truncate">{JSON.stringify(event.change_summary)}</td></tr>)}</tbody></table>{!auditEvents.length && <Empty title="No audit events yet" detail="CMS changes will appear here after the API database is connected."/>}</div></article></>}
@@ -223,7 +506,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
       </main></div>
     </div>
     {showCategoryForm && <dialog open className="modal modal-open"><div className="modal-box max-w-2xl"><h2 className="text-xl font-bold">{editingCategory ? "Edit category" : "New category"}</h2><p className="mb-4 mt-1 text-sm text-base-content/60">Changes save as a draft. Existing app data stays unchanged until published.</p><form onSubmit={submitCategory} className="grid gap-3 sm:grid-cols-2">{(["name", "slug", "description", "image_url"] as const).map((field) => <label key={field} className={`form-control gap-1 ${field === "description" ? "sm:col-span-2" : ""}`}><span className="label-text">{humanize(field)}</span>{field === "description" ? <textarea className="textarea textarea-bordered" value={categoryForm.description ?? ""} onChange={(event) => setCategoryForm({ ...categoryForm, description: event.target.value })}/> : <input className="input input-bordered" value={(categoryForm as typeof emptyCategory)[field] ?? ""} onChange={(event) => setCategoryForm({ ...categoryForm, [field]: event.target.value })} required={field === "name" || field === "slug"}/>}</label>)}<label className="form-control gap-1"><span className="label-text">Sort order</span><input className="input input-bordered" type="number" min="0" value={categoryForm.sort_order} onChange={(event) => setCategoryForm({ ...categoryForm, sort_order: Number(event.target.value) })}/></label><div className="modal-action sm:col-span-2"><button type="button" className="btn btn-ghost" onClick={() => setShowCategoryForm(false)}>Close</button><button className="btn btn-primary">Save draft</button></div></form></div><form method="dialog" className="modal-backdrop"><button onClick={() => setShowCategoryForm(false)}>close</button></form></dialog>}
-    {showProductForm && <dialog open className="modal modal-open"><div className="modal-box max-w-3xl"><h2 className="text-xl font-bold">{editingProduct ? "Edit product" : "New product"}</h2><p className="mb-4 mt-1 text-sm text-base-content/60">Product facts need an approved source reference before publishing.</p><form onSubmit={submitProduct} className="grid gap-3 sm:grid-cols-2"><label className="form-control gap-1"><span className="label-text">Category</span><select className="select select-bordered" required value={productForm.category_id} onChange={(event) => setProductForm({ ...productForm, category_id: event.target.value })}><option value="">Choose a category</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>{(["name", "slug", "model_code", "summary", "image_url", "source_reference"] as const).map((field) => <label key={field} className={`form-control gap-1 ${["summary", "source_reference"].includes(field) ? "sm:col-span-2" : ""}`}><span className="label-text">{humanize(field)}{field === "source_reference" ? " (required to publish)" : ""}</span><input className="input input-bordered" required={field === "name" || field === "slug"} value={(productForm as typeof emptyProduct)[field] ?? ""} onChange={(event) => setProductForm({ ...productForm, [field]: event.target.value })}/></label>)}<label className="form-control gap-1 sm:col-span-2"><span className="label-text">Description</span><textarea className="textarea textarea-bordered min-h-24" value={productForm.description ?? ""} onChange={(event) => setProductForm({ ...productForm, description: event.target.value })}/></label>{(["applications", "features"] as const).map((field) => <label className="form-control gap-1" key={field}><span className="label-text">{humanize(field)} · one per line</span><textarea className="textarea textarea-bordered" value={(productForm[field] ?? []).join("\n")} onChange={(event) => setProductForm({ ...productForm, [field]: event.target.value.split("\n").filter(Boolean) })}/></label>)}<label className="form-control gap-1 sm:col-span-2"><span className="label-text">Specifications · JSON object</span><textarea className="textarea textarea-bordered font-mono text-xs" value={textValue(productForm.specifications)} onChange={(event) => { try { setProductForm({ ...productForm, specifications: JSON.parse(event.target.value) as Record<string, unknown> }); } catch { /* preserve last valid value; validation reports on save */ } }}/><span className="label-text-alt">Example: {`{"Phase":"Single / Three phase"}`}</span></label><div className="modal-action sm:col-span-2"><button type="button" className="btn btn-ghost" onClick={() => setShowProductForm(false)}>Close</button><button className="btn btn-primary">Save draft</button></div></form></div><form method="dialog" className="modal-backdrop"><button onClick={() => setShowProductForm(false)}>close</button></form></dialog>}
+    {showProductForm && <dialog open className="modal modal-open"><div className="modal-box max-w-3xl"><h2 className="text-xl font-bold">{editingProduct ? "Edit product" : "New product"}</h2><p className="mb-4 mt-1 text-sm text-base-content/60">Product facts need an approved source reference before publishing.</p><form onSubmit={submitProduct} className="grid gap-3 sm:grid-cols-2"><label className="form-control gap-1"><span className="label-text">Category</span><select className="select select-bordered" required value={productForm.category_id} onChange={(event) => setProductForm({ ...productForm, category_id: event.target.value })}><option value="">Choose a category</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>{(["name", "slug", "model_code", "summary", "image_url", "source_reference"] as const).map((field) => <label key={field} className={`form-control gap-1 ${["summary", "source_reference"].includes(field) ? "sm:col-span-2" : ""}`}><span className="label-text">{humanize(field)}{field === "source_reference" ? " (required to publish)" : ""}</span><input className="input input-bordered" required={field === "name" || field === "slug"} value={(productForm as typeof emptyProduct)[field] ?? ""} onChange={(event) => setProductForm({ ...productForm, [field]: event.target.value })}/></label>)}<label className="form-control gap-1 sm:col-span-2"><span className="label-text">Description</span><textarea className="textarea textarea-bordered min-h-24" value={productForm.description ?? ""} onChange={(event) => setProductForm({ ...productForm, description: event.target.value })}/></label>{(["applications", "features"] as const).map((field) => <label className="form-control gap-1" key={field}><span className="label-text">{humanize(field)} · one per line</span><textarea className="textarea textarea-bordered" value={(productForm[field] ?? []).join("\n")} onChange={(event) => setProductForm({ ...productForm, [field]: event.target.value.split("\n").filter(Boolean) })}/></label>)}<label className="form-control gap-1"><span className="label-text">Price (₹ INR)</span><input className="input input-bordered" type="number" step="any" placeholder="e.g. 181960" value={productForm.price_minor != null ? productForm.price_minor / 100 : ""} onChange={(event) => setProductForm({ ...productForm, price_minor: event.target.value === "" ? null : Math.round(Number(event.target.value) * 100) })}/></label><label className="form-control gap-1"><span className="label-text">Stock status</span><select className="select select-bordered" value={productForm.stock_status || "instock"} onChange={(event) => setProductForm({ ...productForm, stock_status: event.target.value as Product["stock_status"] })}><option value="instock">In Stock</option><option value="outofstock">Out of Stock</option><option value="onbackorder">Available on Request</option></select></label><label className="form-control gap-1 sm:col-span-2"><span className="label-text">Datasheet / PDF Document URL</span><input className="input input-bordered" type="url" placeholder="https://enertechups.com/wp-content/uploads/manual.pdf" value={productForm.documents?.[0]?.url ?? ""} onChange={(event) => { const url = event.target.value.trim(); setProductForm({ ...productForm, documents: url ? [{ title: "Datasheet", url }] : [] }); }}/></label><label className="form-control gap-1 sm:col-span-2"><span className="label-text">Specifications · JSON object</span><textarea className="textarea textarea-bordered font-mono text-xs" value={textValue(productForm.specifications)} onChange={(event) => { try { setProductForm({ ...productForm, specifications: JSON.parse(event.target.value) as Record<string, unknown> }); } catch { /* preserve last valid value; validation reports on save */ } }}/><span className="label-text-alt">Example: {`{"Phase":"Single / Three phase"}`}</span></label><div className="modal-action sm:col-span-2"><button type="button" className="btn btn-ghost" onClick={() => setShowProductForm(false)}>Close</button><button className="btn btn-primary">Save draft</button></div></form></div><form method="dialog" className="modal-backdrop"><button onClick={() => setShowProductForm(false)}>close</button></form></dialog>}
     {showKnowledgeForm && <dialog open className="modal modal-open"><div className="modal-box max-w-2xl"><h2 className="text-xl font-bold">{editingKnowledge ? "Edit support answer" : "New support answer"}</h2><p className="mb-4 mt-1 text-sm text-base-content/60">Use approved customer-support material and cite its source. Publishing sends the answer to the app.</p><form onSubmit={submitKnowledge} className="grid gap-3 sm:grid-cols-2"><label className="form-control gap-1"><span className="label-text">Question title</span><input className="input input-bordered" required minLength={3} value={knowledgeForm.title} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, title: event.target.value })}/></label><label className="form-control gap-1"><span className="label-text">URL slug</span><input className="input input-bordered" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" value={knowledgeForm.slug} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, slug: event.target.value })}/></label><label className="form-control gap-1"><span className="label-text">Category</span><input className="input input-bordered" required value={knowledgeForm.category} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, category: event.target.value })}/></label><label className="form-control gap-1"><span className="label-text">Source reference · required to publish</span><input className="input input-bordered" value={knowledgeForm.source_reference ?? ""} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, source_reference: event.target.value })}/></label><label className="form-control gap-1 sm:col-span-2"><span className="label-text">Approved answer</span><textarea className="textarea textarea-bordered min-h-40" required minLength={10} maxLength={12000} value={knowledgeForm.answer} onChange={(event) => setKnowledgeForm({ ...knowledgeForm, answer: event.target.value })}/></label><div className="modal-action sm:col-span-2"><button type="button" className="btn btn-ghost" onClick={() => setShowKnowledgeForm(false)}>Close</button><button className="btn btn-primary">Save draft</button></div></form></div><form method="dialog" className="modal-backdrop"><button onClick={() => setShowKnowledgeForm(false)}>close</button></form></dialog>}
   </>;
 }

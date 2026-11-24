@@ -376,3 +376,32 @@ def unpublish_product(
     session.commit()
     session.refresh(product)
     return _product_response(product)
+
+
+@router.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_product(
+    product_id: UUID,
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles("super_admin", "admin", "content_editor")),
+) -> None:
+    product = session.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    _audit(session, admin, "product.deleted", "product", str(product.id), ["deleted"])
+    session.delete(product)
+    session.commit()
+
+
+@router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_category(
+    category_id: UUID,
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles("super_admin", "admin", "content_editor")),
+) -> None:
+    category = session.get(ProductCategory, category_id)
+    if category is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+    _audit(session, admin, "category.deleted", "product_category", str(category.id), ["deleted"])
+    session.delete(category)
+    session.commit()
+

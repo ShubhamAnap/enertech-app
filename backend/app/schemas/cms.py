@@ -388,3 +388,33 @@ class AuditEventPublic(BaseModel):
     entity_id: str
     change_summary: dict[str, object]
     created_at: str
+
+
+class ContactInquiryCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=180)
+    email: EmailStr
+    phone: str = Field(min_length=7, max_length=24)
+    company_name: str | None = Field(default=None, max_length=220)
+    subject: str | None = Field(default=None, max_length=220)
+    message: str = Field(min_length=5, max_length=10000)
+    inquiry_type: str = Field(default="general", max_length=50)
+
+
+class ContactInquiryAdmin(BaseModel):
+    id: UUID
+    name: str
+    email: str
+    phone: str
+    company_name: str | None
+    subject: str | None
+    message: str
+    inquiry_type: str
+    status: str
+    notes: str | None
+    created_at: str
+    updated_at: str
+
+
+class ContactInquiryUpdate(BaseModel):
+    status: str = Field(max_length=40)
+    notes: str | None = Field(default=None, max_length=2000)
