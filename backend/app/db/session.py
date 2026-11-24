@@ -22,7 +22,11 @@ def get_session() -> Generator[Session, None, None]:
             yield session
     except OperationalError as error:
         logger.error("Database operational error: %s", error)
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Database operational error: {error}") from error
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The database is temporarily unavailable. Please try again.",
+        ) from error
     except Exception as error:
         logger.error("Database session exception: %s", error)
         raise
+
