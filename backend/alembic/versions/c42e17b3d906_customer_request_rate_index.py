@@ -26,4 +26,3 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_customer_requests_customer_created", table_name="customer_requests")
-
