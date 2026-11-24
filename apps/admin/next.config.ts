@@ -12,6 +12,15 @@ const nextConfig: NextConfig = {
       },
     },
   },
+  async rewrites() {
+    const apiTarget = (process.env.INTERNAL_API_URL || "http://api:8000").replace(/\/$/, "");
+    return [
+      {
+        source: "/backend-api/:path*",
+        destination: `${apiTarget}/:path*`,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

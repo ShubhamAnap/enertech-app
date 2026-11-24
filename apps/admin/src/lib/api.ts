@@ -12,9 +12,28 @@ export type AdminAccount = { id: string; firebase_uid: string; email: string | n
 export type AuditEvent = { id: string; actor_uid: string; action: string; entity_type: string; entity_id: string; change_summary: Record<string, unknown>; created_at: string };
 export type AdminMediaAsset = { url: string; path: string; bucket: string; content_type: string; size_bytes: number };
 
-export async function api<T>(user: User, path: string, init: RequestInit = {}): Promise<T> {
+export function getEffectiveApiBaseUrl(): string {
+  if (typeof window !== "undefined") {
+    const custom = localStorage.getItem("enertech_cms_api_url");
+    if (custom && custom.trim().length > 0) return custom.trim().replace(/\/$/, "");
+
+    // If running in browser on a deployed hostname (e.g. sslip.io, custom domain):
+    const host = window.location.hostname;
+    const isLocalhost = host === "localhost" || host === "127.0.0.1";
+    const envUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "");
+
+    if (!isLocalhost && (!envUrl || envUrl.includes("localhost") || envUrl.includes("127.0.0.1"))) {
+      // Use internal Next.js rewrite proxy to the backend container
+      return `${window.location.origin}/backend-api/api/v1`;
+    }
+  }
+
   const base = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "");
-  if (!base) throw new Error("Set NEXT_PUBLIC_API_BASE_URL to connect the CMS API.");
+  return base || "http://127.0.0.1:8000/api/v1";
+}
+
+export async function api<T>(user: User, path: string, init: RequestInit = {}): Promise<T> {
+  const base = getEffectiveApiBaseUrl();
   const token = await user.getIdToken();
   const response = await fetch(`${base}${path}`, {
     ...init,
@@ -30,8 +49,7 @@ export async function api<T>(user: User, path: string, init: RequestInit = {}): 
 }
 
 export async function uploadMedia(user: User, file: File): Promise<AdminMediaAsset> {
-  const base = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "");
-  if (!base) throw new Error("Set NEXT_PUBLIC_API_BASE_URL to connect the CMS API.");
+  const base = getEffectiveApiBaseUrl();
   const body = new FormData();
   body.append("file", file);
   const response = await fetch(`${base}/admin/media/upload`, {
