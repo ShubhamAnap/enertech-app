@@ -20,6 +20,8 @@ export default function AuthGate({ children }: { children: (user: User, role: st
 
   useEffect(() => {
     let active = true;
+    let authEvent = 0;
+    let verificationController: AbortController | null = null;
     try {
       const auth = getFirebaseAuth();
       if (!auth) {
@@ -29,6 +31,9 @@ export default function AuthGate({ children }: { children: (user: User, role: st
 
       const unsubscribe = onAuthStateChanged(auth, async (next) => {
         if (!active) return;
+        const currentEvent = ++authEvent;
+        verificationController?.abort();
+        verificationController = null;
         setUser(next);
         setReady(true);
         setAccessMessage("");
@@ -40,15 +45,16 @@ export default function AuthGate({ children }: { children: (user: User, role: st
         }
 
         setAccess("checking");
+        const controller = new AbortController();
+        verificationController = controller;
         try {
-          const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), 6000);
           const response = await fetch(`${getEffectiveApiBaseUrl()}/admin/session`, {
             headers: { Authorization: `Bearer ${await next.getIdToken()}`, Accept: "application/json" },
             cache: "no-store",
             signal: controller.signal,
           }).finally(() => clearTimeout(timeout));
-          if (!active) return;
+          if (!active || currentEvent !== authEvent || controller.signal.aborted) return;
           if (!response.ok) {
             setRole("");
             setAccess(response.status === 401 || response.status === 403 ? "denied" : "unavailable");
@@ -58,11 +64,12 @@ export default function AuthGate({ children }: { children: (user: User, role: st
             return;
           }
           const session = await response.json().catch(() => null) as { role?: string } | null;
+          if (!active || currentEvent !== authEvent || controller.signal.aborted) return;
           if (!session?.role) throw new Error("The API did not return an administrator role.");
           setRole(session.role);
           setAccess("allowed");
         } catch {
-          if (!active) return;
+          if (!active || currentEvent !== authEvent || controller.signal.aborted) return;
           setRole("");
           setAccess("unavailable");
           setAccessMessage("The CMS could not verify your role. Check the API connection and try again.");
@@ -71,6 +78,8 @@ export default function AuthGate({ children }: { children: (user: User, role: st
 
       return () => {
         active = false;
+        authEvent += 1;
+        verificationController?.abort();
         unsubscribe();
       };
     } catch {
@@ -184,10 +193,11 @@ export default function AuthGate({ children }: { children: (user: User, role: st
             {working ? <span className="loading loading-spinner loading-sm" /> : "Sign in"}
           </button>
           <p className="text-xs leading-5 text-base-content/55">
-            Protected by Firebase Authentication. Admin role is granted upon sign-in.
+            Protected by Firebase Authentication. Only accounts with an active CMS role can access this workspace.
           </p>
         </div>
       </form>
     </main>
   );
 }
+
