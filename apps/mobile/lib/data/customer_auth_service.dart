@@ -9,17 +9,20 @@ class CustomerAuthService {
   static Future<void>? _googleInitialization;
 
   Future<UserCredential?> signInWithGoogle() async {
+    final clientId =
+        (dotenv.isInitialized ? dotenv.env['GOOGLE_SERVER_CLIENT_ID'] : null)
+            ?.trim();
+    if (clientId == null || clientId.isEmpty) {
+      throw FirebaseAuthException(
+        code: 'google-not-configured',
+        message: 'Google sign-in is not configured for this app build.',
+      );
+    }
+
     // Strategy 1: Attempt native GoogleSignIn (Credential Manager / One-Tap)
     try {
-      final clientId = (dotenv.isInitialized ? dotenv.env['GOOGLE_SERVER_CLIENT_ID'] : null)?.trim();
-      final effectiveClientId = (clientId != null && clientId.isNotEmpty)
-          ? clientId
-          : '423316048940-e0915dl09gcg428dhffek68o87f5djvt.apps.googleusercontent.com';
-
       final google = GoogleSignIn.instance;
-      _googleInitialization ??= google.initialize(
-        serverClientId: effectiveClientId.isNotEmpty ? effectiveClientId : null,
-      );
+      _googleInitialization ??= google.initialize(serverClientId: clientId);
       await _googleInitialization;
 
       if (google.supportsAuthenticate()) {
@@ -31,7 +34,9 @@ class CustomerAuthService {
         }
       }
     } catch (nativeError) {
-      debugPrint('Native GoogleSignIn note: $nativeError. Attempting Firebase Auth Provider fallback...');
+      debugPrint(
+        'Native GoogleSignIn note: $nativeError. Attempting Firebase Auth Provider fallback...',
+      );
     }
 
     // Strategy 2: Resilient Web/OAuth Provider flow via Firebase Auth

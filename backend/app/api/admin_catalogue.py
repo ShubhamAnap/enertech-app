@@ -49,6 +49,13 @@ def _category_response(category: ProductCategory) -> CategoryAdmin:
         wordpress_source_id=category.wordpress_source_id,
         is_published=category.is_published,
         has_draft=category.draft_data is not None,
+        published_payload={
+            "slug": category.slug,
+            "name": category.name,
+            "description": category.description,
+            "sort_order": category.sort_order,
+            "image_url": category.image_url,
+        } if category.is_published else None,
     )
 
 
@@ -69,7 +76,6 @@ def _product_payload(product: Product) -> dict[str, object]:
         "gallery_images": product.gallery_images or [],
         "price_minor": product.price_minor,
         "currency_code": product.currency_code or "INR",
-        "currency_minor_unit": product.currency_minor_unit if product.currency_minor_unit is not None else 2,
         "currency_minor_unit": product.currency_minor_unit if product.currency_minor_unit is not None else 2,
         "stock_status": product.stock_status or "unknown",
         "stock_quantity": product.stock_quantity,
@@ -100,26 +106,48 @@ def _product_response(product: Product) -> ProductAdmin:
         category_id=parsed_cat_id,
         slug=str(draft.get("slug") or product.slug),
         name=str(draft.get("name") or product.name),
-        model_code=draft.get("model_code") or product.model_code,
-        summary=draft.get("summary") or product.summary,
-        description=draft.get("description") or product.description,
-        applications=draft.get("applications") or product.applications or [],
-        features=draft.get("features") or product.features or [],
-        specifications=draft.get("specifications") or product.specifications or {},
-        image_url=str(draft["image_url"]) if draft.get("image_url") else product.image_url,
-        gallery_images=draft.get("gallery_images") or product.gallery_images or [],
-        price_minor=draft.get("price_minor") if draft.get("price_minor") is not None else product.price_minor,
+        model_code=draft.get("model_code", product.model_code),
+        summary=draft.get("summary", product.summary),
+        description=draft.get("description", product.description),
+        applications=draft.get("applications", product.applications or []),
+        features=draft.get("features", product.features or []),
+        specifications=draft.get("specifications", product.specifications or {}),
+        image_url=str(draft["image_url"]) if draft.get("image_url") else (None if "image_url" in draft else product.image_url),
+        gallery_images=draft.get("gallery_images", product.gallery_images or []),
+        price_minor=draft.get("price_minor") if "price_minor" in draft else product.price_minor,
         currency_code=draft.get("currency_code") or product.currency_code or "INR",
         currency_minor_unit=draft.get("currency_minor_unit", product.currency_minor_unit if product.currency_minor_unit is not None else 2),
-        stock_status=draft.get("stock_status") or product.stock_status or "instock",
-        stock_quantity=draft.get("stock_quantity") if draft.get("stock_quantity") is not None else product.stock_quantity,
-        documents=draft.get("documents") or product.documents or [],
-        source_reference=draft.get("source_reference") or product.source_reference,
+        stock_status=draft.get("stock_status", product.stock_status or "unknown"),
+        stock_quantity=draft.get("stock_quantity", product.stock_quantity),
+        documents=draft.get("documents", product.documents or []),
+        source_reference=draft.get("source_reference", product.source_reference),
         wordpress_source_id=draft.get("wordpress_source_id") or product.wordpress_source_id,
         wordpress_source_url=draft.get("wordpress_source_url") or product.wordpress_source_url,
         is_published=product.is_published,
         has_draft=product.draft_data is not None,
         updated_at=updated_str,
+        published_payload={
+            "category_id": str(product.category_id),
+            "slug": product.slug,
+            "name": product.name,
+            "model_code": product.model_code,
+            "summary": product.summary,
+            "description": product.description,
+            "applications": product.applications or [],
+            "features": product.features or [],
+            "specifications": product.specifications or {},
+            "image_url": product.image_url,
+            "gallery_images": product.gallery_images or [],
+            "price_minor": product.price_minor,
+            "currency_code": product.currency_code or "INR",
+            "currency_minor_unit": product.currency_minor_unit if product.currency_minor_unit is not None else 2,
+            "stock_status": product.stock_status or "unknown",
+            "stock_quantity": product.stock_quantity,
+            "documents": product.documents or [],
+            "source_reference": product.source_reference,
+            "wordpress_source_id": product.wordpress_source_id,
+            "wordpress_source_url": product.wordpress_source_url,
+        } if product.is_published else None,
     )
 
 
@@ -255,7 +283,7 @@ def admin_products(
         filters.append(ProductCategory.slug == category)
     if q and q.strip():
         value = f"%{q.strip()}%"
-        filters.append(or_(Product.name.ilike(value), Product.model_code.ilike(value), Product.summary.ilike(value)))
+        filters.append(or_(Product.name.ilike(value), Product.slug.ilike(value), Product.model_code.ilike(value), Product.summary.ilike(value), Product.description.ilike(value)))
     filtered = statement.where(*filters)
     total = session.scalar(select(func.count()).select_from(filtered.subquery())) or 0
     rows = session.scalars(filtered.order_by(Product.updated_at.desc(), Product.name).limit(limit).offset(offset))

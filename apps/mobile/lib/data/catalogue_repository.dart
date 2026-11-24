@@ -34,7 +34,11 @@ class CatalogueRepository {
       if (raw != null && raw.isNotEmpty) {
         final decoded = jsonDecode(raw);
         if (decoded is List) {
-          cached = decoded.map((row) => ProductCategory.fromJson(row as Map<String, dynamic>)).toList();
+          cached = decoded
+              .map(
+                (row) => ProductCategory.fromJson(row as Map<String, dynamic>),
+              )
+              .toList();
         }
       }
     } catch (_) {}
@@ -42,10 +46,17 @@ class CatalogueRepository {
     // 2. Fetch fresh categories from backend API
     try {
       final json = await _getJson('/catalogue/categories');
-      if (json is List<dynamic> && json.isNotEmpty) {
-        final fresh = json.map((row) => ProductCategory.fromJson(row as Map<String, dynamic>)).toList(growable: false);
-        // Save to cache asynchronously
-        unawaited(SharedPreferences.getInstance().then((p) => p.setString(_categoriesCacheKey, jsonEncode(json))));
+      if (json is List<dynamic>) {
+        final fresh = json
+            .map((row) => ProductCategory.fromJson(row as Map<String, dynamic>))
+            .toList(growable: false);
+        // A successful empty response is authoritative (for example, all
+        // categories were unpublished), so replace stale cached data too.
+        unawaited(
+          SharedPreferences.getInstance().then(
+            (p) => p.setString(_categoriesCacheKey, jsonEncode(json)),
+          ),
+        );
         return fresh;
       }
     } catch (e) {
@@ -55,9 +66,15 @@ class CatalogueRepository {
     return cached;
   }
 
-  Future<ProductPageData> getProducts({String query = '', String? category, int limit = 24, int offset = 0}) async {
+  Future<ProductPageData> getProducts({
+    String query = '',
+    String? category,
+    int limit = 24,
+    int offset = 0,
+  }) async {
     // 1. Try local cache first for instant display
     List<ProductSummary> cachedProducts = [];
+    String? cachedCategoryId;
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_productsCacheKey);
@@ -67,25 +84,46 @@ class CatalogueRepository {
           cachedProducts = ProductPageData.fromJson(decoded).items;
         }
       }
+      if (category != null && category.isNotEmpty) {
+        final categoriesRaw = prefs.getString(_categoriesCacheKey);
+        if (categoriesRaw != null && categoriesRaw.isNotEmpty) {
+          final decodedCategories = jsonDecode(categoriesRaw);
+          if (decodedCategories is List) {
+            for (final row
+                in decodedCategories.whereType<Map<String, dynamic>>()) {
+              if (row['slug'] == category) {
+                cachedCategoryId = row['id'] as String?;
+                break;
+              }
+            }
+          }
+        }
+      }
     } catch (_) {}
 
     // 2. Fetch fresh products from backend API
     try {
-      final json = await _getJson('/catalogue/products', queryParameters: {
-        'limit': '$limit',
-        'offset': '$offset',
-        if (query.trim().isNotEmpty) 'q': query.trim(),
-        if (category != null && category.isNotEmpty) 'category': category,
-      });
+      final json = await _getJson(
+        '/catalogue/products',
+        queryParameters: {
+          'limit': '$limit',
+          'offset': '$offset',
+          if (query.trim().isNotEmpty) 'q': query.trim(),
+          if (category != null && category.isNotEmpty) 'category': category,
+        },
+      );
       if (json is Map<String, dynamic>) {
         final freshData = ProductPageData.fromJson(json);
-        if (freshData.items.isNotEmpty) {
-          // Cache whole catalogue when query is empty
-          if (query.trim().isEmpty && (category == null || category.isEmpty)) {
-            unawaited(SharedPreferences.getInstance().then((p) => p.setString(_productsCacheKey, jsonEncode(json))));
-          }
-          return freshData;
+        // A successful empty response must clear old products rather than
+        // resurrecting products that were unpublished or filtered out.
+        if (query.trim().isEmpty && (category == null || category.isEmpty)) {
+          unawaited(
+            SharedPreferences.getInstance().then(
+              (p) => p.setString(_productsCacheKey, jsonEncode(json)),
+            ),
+          );
         }
+        return freshData;
       }
     } catch (e) {
       debugPrint('CatalogueRepository.getProducts network note: $e');
@@ -93,12 +131,15 @@ class CatalogueRepository {
 
     // 3. If network fails or empty, filter cached real products
     var filtered = cachedProducts.where((p) {
-      if (category != null && category.isNotEmpty && p.categoryId != category) {
+      if (category != null &&
+          category.isNotEmpty &&
+          (cachedCategoryId == null || p.categoryId != cachedCategoryId)) {
         return false;
       }
       if (query.trim().isNotEmpty) {
         final q = query.trim().toLowerCase();
-        final match = p.name.toLowerCase().contains(q) ||
+        final match =
+            p.name.toLowerCase().contains(q) ||
             (p.summary?.toLowerCase().contains(q) ?? false) ||
             (p.modelCode?.toLowerCase().contains(q) ?? false);
         if (!match) return false;
@@ -114,7 +155,9 @@ class CatalogueRepository {
 
   Future<ProductDetails> getProduct(String slug) async {
     try {
-      final json = await _getJson('/catalogue/products/${Uri.encodeComponent(slug)}');
+      final json = await _getJson(
+        '/catalogue/products/${Uri.encodeComponent(slug)}',
+      );
       if (json is Map<String, dynamic>) {
         return ProductDetails.fromJson(json);
       }
@@ -125,21 +168,39 @@ class CatalogueRepository {
     throw const CatalogueException('Product could not be loaded from server.');
   }
 
-  Future<dynamic> _getJson(String path, {Map<String, String>? queryParameters}) async {
+  Future<dynamic> _getJson(
+    String path, {
+    Map<String, String>? queryParameters,
+  }) async {
     final base = Uri.tryParse(baseUrl);
     if (base == null || !base.hasScheme || !base.hasAuthority) {
-      throw const CatalogueException('Catalogue connection settings are invalid.');
+      throw const CatalogueException(
+        'Catalogue connection settings are invalid.',
+      );
     }
-    final root = base.path.endsWith('/') ? base : base.replace(path: '${base.path}/');
-    final uri = root.resolve(path.startsWith('/') ? path.substring(1) : path).replace(queryParameters: queryParameters);
+    final root = base.path.endsWith('/')
+        ? base
+        : base.replace(path: '${base.path}/');
+    final uri = root
+        .resolve(path.startsWith('/') ? path.substring(1) : path)
+        .replace(queryParameters: queryParameters);
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
     try {
-      final request = await client.getUrl(uri).timeout(const Duration(seconds: 5));
+      final request = await client
+          .getUrl(uri)
+          .timeout(const Duration(seconds: 5));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      final response = await request.close().timeout(const Duration(seconds: 5));
-      final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 5));
+      final response = await request.close().timeout(
+        const Duration(seconds: 5),
+      );
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 5));
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw CatalogueException('Catalogue service returned ${response.statusCode}.');
+        throw CatalogueException(
+          'Catalogue service returned ${response.statusCode}.',
+        );
       }
       return jsonDecode(body);
     } finally {

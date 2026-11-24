@@ -43,6 +43,8 @@ def public_knowledge(session: Session = Depends(get_session)) -> list[KnowledgeA
 @router.get("/admin/knowledge", response_model=list[KnowledgeAdmin])
 def list_knowledge(
     q: str | None = Query(default=None, max_length=120),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
     _admin: AdminIdentity = Depends(require_admin_roles(*EDITOR_ROLES)),
 ) -> list[KnowledgeAdmin]:
@@ -50,7 +52,7 @@ def list_knowledge(
     if q and q.strip():
         value = f"%{q.strip()}%"
         statement = statement.where(or_(KnowledgeArticle.title.ilike(value), KnowledgeArticle.category.ilike(value), KnowledgeArticle.slug.ilike(value)))
-    return [_response(article) for article in session.scalars(statement.order_by(KnowledgeArticle.category, KnowledgeArticle.sort_order, KnowledgeArticle.title).limit(100))]
+    return [_response(article) for article in session.scalars(statement.order_by(KnowledgeArticle.category, KnowledgeArticle.sort_order, KnowledgeArticle.title).limit(limit).offset(offset))]
 
 
 @router.post("/admin/knowledge", status_code=status.HTTP_201_CREATED, response_model=KnowledgeAdmin)

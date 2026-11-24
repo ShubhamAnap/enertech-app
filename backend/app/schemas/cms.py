@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 from uuid import UUID
 
@@ -34,6 +35,7 @@ class CategoryAdmin(BaseModel):
     wordpress_source_id: str | None
     is_published: bool
     has_draft: bool
+    published_payload: dict[str, object] | None = None
 
 
 class ProductWrite(BaseModel):
@@ -124,6 +126,7 @@ class ProductAdmin(BaseModel):
     is_published: bool
     has_draft: bool
     updated_at: str
+    published_payload: dict[str, object] | None = None
 
 
 class PageProduct(ProductAdmin):
@@ -135,10 +138,20 @@ class ProductAdminPage(ProductPage):
 
 
 class HomeContent(BaseModel):
+    search_hint: str = Field(default="Search products, models, applications…", max_length=120)
     hero_title: str = Field(default="", max_length=120)
     hero_description: str = Field(default="", max_length=500)
     hero_cta_label: str = Field(default="", max_length=60)
     hero_cta_target: Literal["products", "solution_finder", "quote", "support"] = "solution_finder"
+    intent_section_title: str = Field(default="What are you looking for?", max_length=100)
+    products_card_title: str = Field(default="Explore products", max_length=80)
+    products_card_subtitle: str = Field(default="Browse the catalogue", max_length=120)
+    solution_card_title: str = Field(default="Find a solution", max_length=80)
+    solution_card_subtitle: str = Field(default="Guided requirement", max_length=120)
+    quote_card_title: str = Field(default="Request a quote", max_length=80)
+    quote_card_subtitle: str = Field(default="Tell us what you need", max_length=120)
+    support_card_title: str = Field(default="Service & support", max_length=80)
+    support_card_subtitle: str = Field(default="Get help with equipment", max_length=120)
     announcement_title: str = Field(default="", max_length=120)
     announcement_body: str = Field(default="", max_length=500)
     announcement_visible: bool = False
@@ -261,7 +274,7 @@ class CustomerRequestAdmin(CustomerRequestPublic):
 
 
 class CustomerRequestUpdate(BaseModel):
-    status: Literal["in_review", "assigned", "waiting_for_customer", "resolved", "quote_preparing", "quote_sent", "closed"]
+    status: Literal["submitted", "in_review", "assigned", "waiting_for_customer", "resolved", "quote_preparing", "quote_sent", "closed"]
     assigned_to: str | None = Field(default=None, max_length=128)
     resolution_note: str | None = Field(default=None, max_length=2000)
 
@@ -323,6 +336,23 @@ class CustomerProfileWrite(BaseModel):
             raise ValueError("Enter a valid email address")
         return normalized
 
+    @field_validator("name", "location")
+    @classmethod
+    def normalize_required_profile_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("Enter at least 2 characters")
+        return normalized
+
+    @field_validator("mobile_number")
+    @classmethod
+    def validate_mobile_number(cls, value: str) -> str:
+        normalized = value.strip()
+        digits = "".join(character for character in normalized if character.isdigit())
+        if not re.fullmatch(r"\+?[0-9()\-\s]+", normalized) or not 10 <= len(digits) <= 15:
+            raise ValueError("Enter a phone number with 10 to 15 digits")
+        return normalized
+
     @field_validator("company_name", "gst_number")
     @classmethod
     def normalize_optional_business_fields(cls, value: str | None) -> str | None:
@@ -331,7 +361,10 @@ class CustomerProfileWrite(BaseModel):
     @field_validator("gst_number")
     @classmethod
     def normalize_gst_number(cls, value: str | None) -> str | None:
-        return value.upper() if value else None
+        normalized = value.strip().upper() if value and value.strip() else None
+        if normalized and not re.fullmatch(r"[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]", normalized):
+            raise ValueError("Enter a valid 15-character GSTIN")
+        return normalized
 
     @field_validator("company_name")
     @classmethod
@@ -392,12 +425,32 @@ class AuditEventPublic(BaseModel):
 
 class ContactInquiryCreate(BaseModel):
     name: str = Field(min_length=2, max_length=180)
-    email: str = Field(min_length=5, max_length=254)
     phone: str = Field(min_length=7, max_length=24)
     company_name: str | None = Field(default=None, max_length=220)
     subject: str | None = Field(default=None, max_length=220)
     message: str = Field(min_length=5, max_length=10000)
-    inquiry_type: str = Field(default="general", max_length=50)
+    inquiry_type: Literal["general", "sales", "product", "service"] = "general"
+
+    @field_validator("name", "phone", "message", mode="before")
+    @classmethod
+    def strip_contact_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("company_name", "subject", mode="before")
+    @classmethod
+    def normalize_optional_contact_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            clean = value.strip()
+            return clean or None
+        return value
+
+    @field_validator("phone")
+    @classmethod
+    def validate_contact_phone(cls, value: str) -> str:
+        digits = re.sub(r"[^0-9]", "", value)
+        if not re.fullmatch(r"\+?[0-9()\-\s]+", value) or not 10 <= len(digits) <= 15:
+            raise ValueError("Enter 10–15 phone digits with an optional country code")
+        return value
 
 
 class ContactInquiryAdmin(BaseModel):

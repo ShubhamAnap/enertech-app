@@ -2,26 +2,39 @@
 
 import { signOut, type User } from "firebase/auth";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, getEffectiveApiBaseUrl, uploadMedia, type AdminAccount, type AuditEvent, type Category, type ContentEnvelope, type CustomerProfile, type CustomerRequest, type KnowledgeArticle, type Product } from "@/lib/api";
+import { api, getEffectiveApiBaseUrl, uploadMedia, type AdminAccount, type AuditEvent, type Category, type ContactInquiry, type ContentEnvelope, type CustomerProfile, type CustomerRequest, type KnowledgeArticle, type Product } from "@/lib/api";
 import { getFirebaseAuth } from "@/lib/firebase";
 
-type Section = "overview" | "products" | "categories" | "home" | "contacts" | "solution_finder" | "chat" | "brand" | "wordpress" | "service" | "quotes" | "knowledge" | "customers" | "admins" | "audit";
-const sectionNames: Record<Section, string> = { overview: "Overview", products: "Products", categories: "Collections", home: "Home screen", contacts: "Contact details", solution_finder: "Solution Finder", chat: "Chat support", brand: "App branding", wordpress: "WordPress import", service: "Service requests", quotes: "Quote enquiries", knowledge: "FAQs & knowledge", customers: "Customers", admins: "Admin access", audit: "Audit history" };
+type Section = "overview" | "products" | "categories" | "home" | "contacts" | "solution_finder" | "chat" | "brand" | "wordpress" | "service" | "quotes" | "contact_inquiries" | "knowledge" | "customers" | "admins" | "audit";
+const sectionNames: Record<Section, string> = { overview: "Overview", products: "Products", categories: "Collections", home: "Home screen", contacts: "Contact details", solution_finder: "Solution Finder", chat: "Chat support", brand: "App branding", wordpress: "WordPress import", service: "Service requests", quotes: "Quote enquiries", contact_inquiries: "Contact enquiries", knowledge: "FAQs & knowledge", customers: "Customers", admins: "Admin access", audit: "Audit history" };
 const contentSections: { key: Section; title: string }[] = [{ key: "home", title: "Home screen" }, { key: "contacts", title: "Contact details" }, { key: "solution_finder", title: "Solution Finder" }, { key: "chat", title: "Chat support" }, { key: "brand", title: "App branding" }, { key: "knowledge", title: "FAQs & knowledge" }];
 const emptyCategory = { slug: "", name: "", description: "", sort_order: 0, image_url: null as string | null, wordpress_source_id: null as string | null };
-const emptyProduct = { category_id: "", slug: "", name: "", model_code: "", summary: "", description: "", applications: [] as string[], features: [] as string[], specifications: {} as Record<string, unknown>, image_url: null as string | null, gallery_images: [] as string[], price_minor: null as number | null, currency_code: "INR", currency_minor_unit: 2, stock_status: "instock" as Product["stock_status"], stock_quantity: null as number | null, documents: [] as Product["documents"], source_reference: "", wordpress_source_id: null as string | null, wordpress_source_url: null as string | null };
+const emptyProduct = { category_id: "", slug: "", name: "", model_code: "", summary: "", description: "", applications: [] as string[], features: [] as string[], specifications: {} as Record<string, unknown>, image_url: null as string | null, gallery_images: [] as string[], price_minor: null as number | null, currency_code: "INR", currency_minor_unit: 2, stock_status: "unknown" as Product["stock_status"], stock_quantity: null as number | null, documents: [] as Product["documents"], source_reference: "", wordpress_source_id: null as string | null, wordpress_source_url: null as string | null };
 const emptyKnowledge = { slug: "", title: "", category: "General", answer: "", source_reference: "", sort_order: 0 };
 
 function textValue(value: unknown): string { return value == null ? "" : typeof value === "string" ? value : JSON.stringify(value, null, 2); }
 function humanize(key: string): string { return key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
-function catalogPrice(product: Product): string { if (product.price_minor == null) return "—"; const digits = Math.max(0, Math.min(product.currency_minor_unit, 4)); return new Intl.NumberFormat("en-IN", { style: "currency", currency: product.currency_code, minimumFractionDigits: 0, maximumFractionDigits: digits }).format(product.price_minor / (10 ** digits)); }
-function stockLabel(value: Product["stock_status"]): string { return ({ instock: "In stock", outofstock: "Out of stock", onbackorder: "Backorder", unknown: "In stock" })[value] || "In stock"; }
+function catalogPrice(product: Product): string { if (product.price_minor == null) return "—"; const digits = productPriceDigits(product); return new Intl.NumberFormat("en-IN", { style: "currency", currency: product.currency_code, minimumFractionDigits: 0, maximumFractionDigits: digits }).format(product.price_minor / (10 ** digits)); }
+function productPriceDigits(product: Pick<Product, "currency_minor_unit">): number { return Math.max(0, Math.min(product.currency_minor_unit, 4)); }
+function stockLabel(status: Product["stock_status"]): string { return ({ instock: "In stock", outofstock: "Out of stock", onbackorder: "On backorder", unknown: "Not provided" })[status]; }
+function stockBadgeClass(status: Product["stock_status"]): string { return ({ instock: "badge-success", outofstock: "badge-error", onbackorder: "badge-warning", unknown: "badge-ghost" })[status]; }
+const requestTransitions: Record<string, Record<string, string[]>> = {
+  service: { submitted: ["in_review", "assigned", "waiting_for_customer", "closed"], in_review: ["assigned", "waiting_for_customer", "resolved", "closed"], assigned: ["in_review", "waiting_for_customer", "resolved", "closed"], waiting_for_customer: ["in_review", "assigned", "resolved", "closed"], resolved: ["closed"], closed: [] },
+  quote: { submitted: ["in_review", "assigned", "waiting_for_customer", "quote_preparing", "closed"], in_review: ["assigned", "waiting_for_customer", "quote_preparing", "quote_sent", "closed"], assigned: ["in_review", "waiting_for_customer", "quote_preparing", "quote_sent", "closed"], waiting_for_customer: ["in_review", "assigned", "quote_preparing", "quote_sent", "closed"], quote_preparing: ["waiting_for_customer", "quote_sent", "closed"], quote_sent: ["waiting_for_customer", "closed"], closed: [] },
+};
+const requestStatuses: Record<string, string[]> = {
+  service: ["submitted", "in_review", "assigned", "waiting_for_customer", "resolved", "closed"],
+  quote: ["submitted", "in_review", "assigned", "waiting_for_customer", "quote_preparing", "quote_sent", "closed"],
+};
 
 export default function AdminShell({ user, role }: { user: User; role: string }) {
   const [section, setSection] = useState<Section>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [productTotal, setProductTotal] = useState(0);
+  const [productHasMore, setProductHasMore] = useState(false);
+  const [categoryHasMore, setCategoryHasMore] = useState(false);
   const [content, setContent] = useState<ContentEnvelope | null>(null);
   const [contentDraft, setContentDraft] = useState<Record<string, unknown>>({});
   const [notice, setNotice] = useState("");
@@ -35,6 +48,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
   const [categoryForm, setCategoryForm] = useState<typeof emptyCategory | Category>(emptyCategory);
   const [productForm, setProductForm] = useState<typeof emptyProduct | Product>(emptyProduct);
+  const [specificationsText, setSpecificationsText] = useState("{}");
+  const [specificationsError, setSpecificationsError] = useState("");
   const [editingCategory, setEditingCategory] = useState<string | null>(null);
   const [editingProduct, setEditingProduct] = useState<string | null>(null);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
@@ -43,6 +58,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [customerProfiles, setCustomerProfiles] = useState<CustomerProfile[]>([]);
   const [adminAccounts, setAdminAccounts] = useState<AdminAccount[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [auditQuery, setAuditQuery] = useState("");
+  const [auditEntityFilter, setAuditEntityFilter] = useState("all");
   const [adminForm, setAdminForm] = useState({ firebase_uid: "", email: "", display_name: "", role: "content_editor" as AdminAccount["role"], is_active: true });
   const [editingAdminUid, setEditingAdminUid] = useState<string | null>(null);
   const [knowledgeForm, setKnowledgeForm] = useState<typeof emptyKnowledge | KnowledgeArticle>(emptyKnowledge);
@@ -51,30 +68,39 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [wpPreview, setWpPreview] = useState<Array<Record<string, unknown>>>([]);
   const [wpStatus, setWpStatus] = useState<string>("");
   const [customerRequests, setCustomerRequests] = useState<CustomerRequest[]>([]);
+  const [assignableStaff, setAssignableStaff] = useState<AdminAccount[]>([]);
+  const [requestsHasMore, setRequestsHasMore] = useState(false);
   const [requestNotes, setRequestNotes] = useState<Record<string, string>>({});
-  const [overviewTab, setOverviewTab] = useState<"overview" | "sales" | "orders" | "customers" | "products">("overview");
-  const [timeRange, setTimeRange] = useState<"30" | "365">("365");
+  const [requestAssignees, setRequestAssignees] = useState<Record<string, string>>({});
+  const [requestStatusFilter, setRequestStatusFilter] = useState("all");
+  const [requestQuery, setRequestQuery] = useState("");
+  const [knowledgeHasMore, setKnowledgeHasMore] = useState(false);
+  const [customersHasMore, setCustomersHasMore] = useState(false);
+  const [auditHasMore, setAuditHasMore] = useState(false);
+  const [contactInquiries, setContactInquiries] = useState<ContactInquiry[]>([]);
+  const [inquiryNotes, setInquiryNotes] = useState<Record<string, string>>({});
+  const [inquiryStatuses, setInquiryStatuses] = useState<Record<string, ContactInquiry["status"]>>({});
+  const [inquiryStatusFilter, setInquiryStatusFilter] = useState("all");
+  const [inquiryQuery, setInquiryQuery] = useState("");
+  const [inquiryHasMore, setInquiryHasMore] = useState(false);
   const [showApiModal, setShowApiModal] = useState(false);
   const [customApiUrl, setCustomApiUrl] = useState("");
   const title = sectionNames[section];
 
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      setCustomApiUrl(localStorage.getItem("enertech_cms_api_url") || getEffectiveApiBaseUrl());
-    }
-  }, []);
-
-  const loadCatalogue = useCallback(async () => {
+  const loadCatalogue = useCallback(async (productOffset = 0, categoryOffset = 0, append = false) => {
     setLoading(true); setError("");
     try {
-      const catsPromise = api<Category[]>(user, "/admin/catalogue/categories?limit=200").catch((e) => {
+      const catsPromise = api<Category[]>(user, `/admin/catalogue/categories?limit=500&offset=${categoryOffset}&q=${encodeURIComponent(query)}`).catch((e) => {
         console.warn("Categories fetch:", e);
         return [] as Category[];
       });
-      const prodsPromise = api<{ items: Product[]; total: number }>(user, `/admin/catalogue/products?limit=300&q=${encodeURIComponent(query)}`);
+      const prodsPromise = api<{ items: Product[]; total: number }>(user, `/admin/catalogue/products?limit=300&offset=${productOffset}&q=${encodeURIComponent(query)}`);
       const [nextCategories, page] = await Promise.all([catsPromise, prodsPromise]);
-      if (nextCategories.length > 0) setCategories(nextCategories);
-      setProducts(page.items);
+      setCategories((current) => append ? [...current, ...nextCategories] : nextCategories);
+      setCategoryHasMore(nextCategories.length === 500);
+      setProducts((current) => append ? [...current, ...page.items] : page.items);
+      setProductTotal(page.total);
+      setProductHasMore(productOffset + page.items.length < page.total);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load catalogue data.");
     } finally {
@@ -89,23 +115,59 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     finally { setLoading(false); }
   }, [user]);
 
-  const loadRequests = useCallback(async (kind: "service" | "quote") => {
+  const loadRequests = useCallback(async (kind: "service" | "quote", offset = 0, append = false) => {
     setLoading(true); setError("");
-    try { setCustomerRequests(await api<CustomerRequest[]>(user, `/admin/requests?kind=${kind}&limit=100`)); }
+    if (!append) setCustomerRequests([]);
+    try {
+      const params = new URLSearchParams({ kind, limit: "100", offset: String(offset), q: requestQuery.trim() });
+      if (requestStatusFilter !== "all" && requestStatuses[kind].includes(requestStatusFilter)) params.set("status", requestStatusFilter);
+      const rows = await api<CustomerRequest[]>(user, `/admin/requests?${params.toString()}`);
+      setCustomerRequests((current) => append ? [...current, ...rows] : rows);
+      setRequestAssignees((current) => ({ ...current, ...Object.fromEntries(rows.map((row) => [row.id, row.assigned_to ?? ""])) }));
+      setRequestNotes((current) => ({ ...current, ...Object.fromEntries(rows.map((row) => [row.id, row.resolution_note ?? ""])) }));
+      setRequestsHasMore(rows.length === 100);
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load customer requests."); }
     finally { setLoading(false); }
+  }, [requestQuery, requestStatusFilter, user]);
+
+  const loadAssignableStaff = useCallback(async () => {
+    try { setAssignableStaff(await api<AdminAccount[]>(user, "/admin/assignable-staff")); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load active request assignees."); }
   }, [user]);
 
-  const loadKnowledge = useCallback(async () => {
+  const loadContactInquiries = useCallback(async (offset = 0, append = false) => {
     setLoading(true); setError("");
-    try { setKnowledgeArticles(await api<KnowledgeArticle[]>(user, `/admin/knowledge?q=${encodeURIComponent(query)}`)); }
+    try {
+      const params = new URLSearchParams({ limit: "50", offset: String(offset), q: inquiryQuery.trim() });
+      if (inquiryStatusFilter !== "all") params.set("status", inquiryStatusFilter);
+      const rows = await api<ContactInquiry[]>(user, `/admin/contact-inquiries?${params.toString()}`);
+      setContactInquiries((current) => append ? [...current, ...rows] : rows);
+      setInquiryNotes((current) => ({ ...current, ...Object.fromEntries(rows.map((row) => [row.id, row.notes ?? ""])) }));
+      setInquiryStatuses((current) => ({ ...current, ...Object.fromEntries(rows.map((row) => [row.id, row.status])) }));
+      setInquiryHasMore(rows.length === 50);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load contact enquiries."); }
+    finally { setLoading(false); }
+  }, [inquiryQuery, inquiryStatusFilter, user]);
+
+  const loadKnowledge = useCallback(async (offset = 0, append = false) => {
+    setLoading(true); setError("");
+    try {
+      const rows = await api<KnowledgeArticle[]>(user, `/admin/knowledge?q=${encodeURIComponent(query)}&limit=100&offset=${offset}`);
+      setKnowledgeArticles((current) => append ? [...current, ...rows] : rows);
+      setKnowledgeHasMore(rows.length === 100);
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load support content."); }
     finally { setLoading(false); }
   }, [query, user]);
 
-  const loadCustomers = useCallback(async () => {
+  const loadCustomers = useCallback(async (offset = 0, append = false) => {
     setLoading(true); setError("");
-    try { setCustomerProfiles(await api<CustomerProfile[]>(user, `/admin/customers?q=${encodeURIComponent(query)}&limit=100`)); }
+    try {
+      const rows = await api<CustomerProfile[]>(user, `/admin/customers?q=${encodeURIComponent(query)}&limit=100&offset=${offset}`);
+      setCustomerProfiles((current) => append ? [...current, ...rows] : rows);
+      setCustomersHasMore(rows.length === 100);
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load customer profiles."); }
     finally { setLoading(false); }
   }, [query, user]);
@@ -117,12 +179,18 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     finally { setLoading(false); }
   }, [user]);
 
-  const loadAudit = useCallback(async () => {
+  const loadAudit = useCallback(async (offset = 0, append = false) => {
     setLoading(true); setError("");
-    try { setAuditEvents(await api<AuditEvent[]>(user, "/admin/audit-events?limit=100")); }
+    try {
+      const params = new URLSearchParams({ limit: "100", offset: String(offset), q: auditQuery.trim() });
+      if (auditEntityFilter !== "all") params.set("entity_type", auditEntityFilter);
+      const rows = await api<AuditEvent[]>(user, `/admin/audit-events?${params.toString()}`);
+      setAuditEvents((current) => append ? [...current, ...rows] : rows);
+      setAuditHasMore(rows.length === 100);
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not load audit history."); }
     finally { setLoading(false); }
-  }, [user]);
+  }, [auditEntityFilter, auditQuery, user]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { if (section === "products" || section === "categories" || section === "overview") void loadCatalogue(); }, 0);
@@ -137,13 +205,21 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     return () => window.clearTimeout(timer);
   }, [section, loadRequests]);
   useEffect(() => {
+    const timer = window.setTimeout(() => { if (section === "service" || section === "quotes") void loadAssignableStaff(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [section, loadAssignableStaff]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { if (section === "contact_inquiries") void loadContactInquiries(); }, 200);
+    return () => window.clearTimeout(timer);
+  }, [section, loadContactInquiries]);
+  useEffect(() => {
     const timer = window.setTimeout(() => { if (section === "knowledge") void loadKnowledge(); }, 0);
     return () => window.clearTimeout(timer);
   }, [section, loadKnowledge]);
   useEffect(() => {
-    const timer = window.setTimeout(() => { if (section === "customers" || section === "overview") void loadCustomers(); }, 0);
+    const timer = window.setTimeout(() => { if ((section === "customers" || section === "overview") && (role === "admin" || role === "super_admin")) void loadCustomers(); }, 0);
     return () => window.clearTimeout(timer);
-  }, [section, loadCustomers]);
+  }, [section, loadCustomers, role]);
   useEffect(() => {
     const timer = window.setTimeout(() => { if (section === "admins") void loadAdmins(); }, 0);
     return () => window.clearTimeout(timer);
@@ -159,7 +235,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
 
   const filteredProducts = products.filter((p) => {
     const q = query.trim().toLowerCase();
-    const matchesQuery = !q || p.name.toLowerCase().includes(q) || p.slug.toLowerCase().includes(q) || (p.model_code && p.model_code.toLowerCase().includes(q));
+    const matchesQuery = !q || p.name.toLowerCase().includes(q) || p.slug.toLowerCase().includes(q) || (p.model_code && p.model_code.toLowerCase().includes(q)) || (p.summary?.toLowerCase().includes(q) ?? false) || (p.description?.toLowerCase().includes(q) ?? false);
     const matchesCategory = selectedProductCategory === "all" || p.category_id === selectedProductCategory;
     const matchesStatus = productStatusFilter === "all" || (productStatusFilter === "published" ? p.is_published : !p.is_published);
     return matchesQuery && matchesCategory && matchesStatus;
@@ -207,7 +283,23 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   async function submitProduct(event: FormEvent) {
     event.preventDefault(); setError(""); setNotice("");
     try {
-      const payload = { ...productForm, applications: Array.isArray(productForm.applications) ? productForm.applications : [], features: Array.isArray(productForm.features) ? productForm.features : [], gallery_images: Array.isArray(productForm.gallery_images) ? productForm.gallery_images : [] };
+      let specifications: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(specificationsText);
+        if (parsed == null || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("Specifications must be a JSON object.");
+        specifications = parsed as Record<string, unknown>;
+      } catch {
+        setSpecificationsError("Enter a valid JSON object before saving.");
+        setError("Fix the product specifications JSON before saving.");
+        return;
+      }
+      setSpecificationsError("");
+      const documents = (productForm.documents ?? []).filter((document) => document.title.trim() || document.url.trim());
+      if (documents.some((document) => !document.title.trim() || !document.url.trim().startsWith("https://"))) {
+        setError("Each document needs a title and an HTTPS URL.");
+        return;
+      }
+      const payload = { ...productForm, specifications, applications: Array.isArray(productForm.applications) ? productForm.applications : [], features: Array.isArray(productForm.features) ? productForm.features : [], gallery_images: Array.isArray(productForm.gallery_images) ? productForm.gallery_images : [], documents };
       const saved = await api<Product>(user, editingProduct ? `/admin/catalogue/products/${editingProduct}` : "/admin/catalogue/products", { method: editingProduct ? "PATCH" : "POST", body: JSON.stringify(payload) });
       setNotice("Product draft saved."); setProductForm(saved); setEditingProduct(saved.id); await loadCatalogue();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save product."); }
@@ -217,6 +309,18 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     setError(""); setNotice("");
     try { await api(user, path, { method: "POST" }); setNotice("Published successfully. The app now receives the published version."); await loadCatalogue(); if (["home", "contacts", "solution_finder", "chat", "brand"].includes(section)) await loadContent(section); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not publish this change."); }
+  }
+
+  async function unpublish(path: string) {
+    if (!window.confirm("Unpublish this item? It will stop appearing in the customer app until it is published again.")) return;
+    setError(""); setNotice("");
+    try {
+      await api(user, path, { method: "POST" });
+      setNotice("Unpublished. This content is no longer delivered to the customer app.");
+      await loadCatalogue();
+      if (["home", "contacts", "solution_finder", "chat", "brand"].includes(section)) await loadContent(section);
+      if (section === "knowledge") await loadKnowledge();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not unpublish this content."); }
   }
 
   async function saveContent() {
@@ -242,12 +346,38 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     } catch (cause) { setError(cause instanceof Error ? cause.message : "WooCommerce sync failed."); }
   }
 
-  async function updateCustomerRequest(record: CustomerRequest, nextStatus: string) {
+  async function updateCustomerRequest(record: CustomerRequest, nextStatus: string, assignedTo: string) {
     setError(""); setNotice("");
     try {
-      await api(user, `/admin/requests/${record.id}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus, assigned_to: record.assigned_to, resolution_note: requestNotes[record.id] ?? record.resolution_note ?? "" }) });
-      setNotice("Request updated. The customer can see the new status in the app."); await loadRequests(record.kind);
+      await api(user, `/admin/requests/${record.id}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus, assigned_to: assignedTo || null, resolution_note: requestNotes[record.id] ?? record.resolution_note ?? "" }) });
+      setNotice("Request update saved. The customer can see the latest status in the app."); await loadRequests(record.kind);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not update request."); }
+  }
+
+  async function updateContactInquiry(record: ContactInquiry) {
+    setError(""); setNotice("");
+    try {
+      await api(user, `/admin/contact-inquiries/${record.id}`, { method: "PATCH", body: JSON.stringify({ status: inquiryStatuses[record.id] ?? record.status, notes: inquiryNotes[record.id] ?? "" }) });
+      setNotice("Contact enquiry updated and recorded in the audit history.");
+      await loadContactInquiries();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not update this contact enquiry."); }
+  }
+
+  function exportLoadedAudit() {
+    const columns = ["created_at", "action", "entity_type", "entity_id", "actor_uid", "change_summary"];
+    const safeCell = (value: unknown) => {
+      let text = typeof value === "string" ? value : JSON.stringify(value ?? "") ?? "";
+      if (/^[\t\r ]*[=+@\-]/.test(text)) text = `'${text}`;
+      return `"${text.replaceAll('"', '""')}"`;
+    };
+    const rows = auditEvents.map((event) => [event.created_at, event.action, event.entity_type, event.entity_id, event.actor_uid, JSON.stringify(event.change_summary)]);
+    const csv = [columns, ...rows].map((row) => row.map(safeCell).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `enertech-audit-loaded-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   async function submitKnowledge(event: FormEvent) {
@@ -269,7 +399,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   }
 
   function editCategory(category: Category) { setCategoryForm(category); setEditingCategory(category.id); setShowCategoryForm(true); }
-  function editProduct(product: Product) { setProductForm(product); setEditingProduct(product.id); setShowProductForm(true); }
+  function editProduct(product: Product) { setProductForm(product); setSpecificationsText(JSON.stringify(product.specifications ?? {}, null, 2)); setSpecificationsError(""); setEditingProduct(product.id); setShowProductForm(true); }
 
   function toggleSelectProduct(id: string) {
     const next = new Set(selectedProductIds);
@@ -319,17 +449,21 @@ export default function AdminShell({ user, role }: { user: User; role: string })
               ))}
             </ul>
 
-            <div className="nav-section">CUSTOMER REQUESTS</div>
-            <ul className="menu nav-menu">
-              {(["quotes", "service"] as Section[]).map((key) => (
-                <li key={key}>
-                  <button className={section === key ? "active" : ""} onClick={() => { setSection(key); setMenuOpen(false); }}>
-                    <span aria-hidden="true">{key === "quotes" ? "▤" : "⚙"}</span>
-                    <span>{sectionNames[key]}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            {(role === "super_admin" || role === "admin") && (
+              <>
+                <div className="nav-section">CUSTOMER REQUESTS</div>
+                <ul className="menu nav-menu">
+                  {(["quotes", "service", "contact_inquiries"] as Section[]).map((key) => (
+                    <li key={key}>
+                      <button className={section === key ? "active" : ""} onClick={() => { setSection(key); setMenuOpen(false); }}>
+                        <span aria-hidden="true">{key === "quotes" ? "▤" : key === "service" ? "⚙" : "✉"}</span>
+                        <span>{sectionNames[key]}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
 
             <div className="nav-section">APP CONTENT</div>
             <ul className="menu nav-menu">
@@ -369,8 +503,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
           </nav>
 
           <div className="sidebar-bottom">
-            <button className="environment-pill flex items-center justify-between w-full hover:bg-base-200/50 p-2 rounded-lg text-left" onClick={() => setShowApiModal(true)}>
-              <span className="flex items-center gap-1.5"><span className="environment-dot" />API Connected</span>
+            <button className="environment-pill flex items-center justify-between w-full hover:bg-base-200/50 p-2 rounded-lg text-left" onClick={() => { setCustomApiUrl(localStorage.getItem("enertech_cms_api_url") || getEffectiveApiBaseUrl()); setShowApiModal(true); }}>
+              <span>API Endpoint</span>
               <span className="text-[10px] opacity-60">⚙ Config</span>
             </button>
             <div className="user-row">
@@ -400,7 +534,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
             <div className="prototype-note flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span aria-hidden="true" className="text-emerald-500 font-bold">●</span>
-                <span><strong>Changes are staged safely.</strong> Save creates a draft; publishing makes verified content available to the mobile app.</span>
+                <span><strong>Changes are staged safely.</strong> Save creates a draft; publishing makes it available to the customer app.</span>
               </div>
               <button className="btn btn-xs btn-ghost text-xs underline" onClick={() => void wordpressSync()}>⚡ Quick Sync WP</button>
             </div>
@@ -408,172 +542,31 @@ export default function AdminShell({ user, role }: { user: User; role: string })
             {notice && <div role="status" className="alert alert-success mb-4 text-sm font-medium">{notice}</div>}
             {error && <div role="alert" className="alert alert-error mb-4 text-sm font-medium">{error}</div>}
 
-            {/* OVERVIEW & ANALYTICS DASHBOARD (Medusa Style) */}
+            {/* OVERVIEW */}
             {section === "overview" && (
               <>
-                <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+                <div className="page-heading">
                   <div>
-                    <p className="eyebrow text-xs font-bold text-primary tracking-wider">PLATFORM INTELLIGENCE</p>
-                    <h1 className="text-2xl font-bold tracking-tight">Store & System Analytics</h1>
-                    <p className="text-sm text-base-content/65">Catalogue performance, customer registrations, and inquiry trends.</p>
+                    <p className="eyebrow">WORKSPACE</p>
+                    <h1>Platform overview</h1>
+                    <p>Current records loaded by this CMS session. Trend analytics are not available yet.</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <select className="select select-bordered select-sm text-xs font-medium" value={timeRange} onChange={(e) => setTimeRange(e.target.value as "30" | "365")}>
-                      <option value="30">Last 30 Days</option>
-                      <option value="365">Last 365 Days</option>
-                    </select>
-                    <button className="btn btn-sm btn-outline text-xs" onClick={() => window.print()}>Generate Report</button>
-                  </div>
+                  <button className="btn btn-outline" onClick={() => { void loadCatalogue(); if (role === "admin" || role === "super_admin") void loadCustomers(); }}>Refresh</button>
                 </div>
-
-                {/* Sub-tabs */}
-                <div className="tabs tabs-bordered mb-6 border-b border-base-200">
-                  {(["overview", "sales", "orders", "customers", "products"] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      className={`tab tab-sm font-semibold capitalize pb-3 ${overviewTab === tab ? "tab-active border-b-2 border-primary text-primary" : "text-base-content/60"}`}
-                      onClick={() => setOverviewTab(tab)}
-                    >
-                      {tab}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Metrics Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {[
-                    ["Total Products", products.length || 178, "WooCommerce Synced Catalogue", "📦"],
-                    ["Product Families", categories.length || 68, "Organized Product Categories", "📁"],
-                    ["Registered Customers", customerProfiles.length || 1, "Verified B2B & Retail Accounts", "👥"],
-                    ["Customer Enquiries", customerRequests.length, "Pending Quotes & Service Tickets", "⚡"],
-                  ].map(([label, value, foot, icon]) => (
-                    <article className="card bg-base-100 border border-base-200 shadow-xs p-4 rounded-xl" key={String(label)}>
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-base-content/60 uppercase tracking-wider">{label}</span>
-                        <span className="text-lg">{icon}</span>
-                      </div>
-                      <strong className="text-3xl font-extrabold text-base-content mt-2">{value}</strong>
-                      <span className="text-xs text-base-content/50 mt-1 font-medium">{foot}</span>
+                    ["Product matches", productTotal, "First 300 matches are loaded in the catalogue view"],
+                    ["Collections loaded", categories.length, "CMS collections currently loaded"],
+                    ["Customer profiles loaded", role === "admin" || role === "super_admin" ? customerProfiles.length : "—", role === "admin" || role === "super_admin" ? "Customer directory API returns up to 100 records" : "Requires admin access"],
+                  ].map(([label, value, detail]) => (
+                    <article className="card panel p-4" key={String(label)}>
+                      <span className="text-xs font-semibold uppercase tracking-wider text-base-content/60">{label}</span>
+                      <strong className="mt-2 text-3xl font-extrabold text-base-content">{value}</strong>
+                      <span className="mt-1 text-xs text-base-content/55">{detail}</span>
                     </article>
                   ))}
                 </div>
-
-                {/* Medusa Area Charts */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-6">
-                  {/* Chart 1: New Customers */}
-                  <article className="card bg-base-100 border border-base-200 shadow-xs rounded-xl p-5">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <div className="flex items-center gap-1.5 text-xs font-semibold text-base-content/60">
-                          <span>👥</span> New customers
-                        </div>
-                        <strong className="text-2xl font-extrabold text-base-content">{customerProfiles.length || 48}</strong>
-                        <p className="text-xs text-base-content/50 font-medium">New customer registrations over time</p>
-                      </div>
-                    </div>
-                    {/* SVG Area Chart */}
-                    <div className="w-full h-48 relative">
-                      <svg viewBox="0 0 500 180" className="w-full h-full overflow-visible">
-                        <defs>
-                          <linearGradient id="gradGreen" x1="0%" y1="0%" x2="0%" y2="100%">
-                            <stop offset="0%" stopColor="#10b981" stopOpacity="0.38" />
-                            <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
-                          </linearGradient>
-                        </defs>
-                        {/* Grid lines */}
-                        <line x1="30" y1="20" x2="490" y2="20" stroke="#e5e7eb" strokeDasharray="3 3" />
-                        <text x="15" y="24" fontSize="10" fill="#9ca3af">25</text>
-                        <line x1="30" y1="60" x2="490" y2="60" stroke="#e5e7eb" strokeDasharray="3 3" />
-                        <text x="15" y="64" fontSize="10" fill="#9ca3af">15</text>
-                        <line x1="30" y1="100" x2="490" y2="100" stroke="#e5e7eb" strokeDasharray="3 3" />
-                        <text x="15" y="104" fontSize="10" fill="#9ca3af">10</text>
-                        <line x1="30" y1="140" x2="490" y2="140" stroke="#e5e7eb" strokeDasharray="3 3" />
-                        <text x="20" y="144" fontSize="10" fill="#9ca3af">0</text>
-
-                        {/* Area Fill */}
-                        <path
-                          d="M 40 140 Q 90 140 130 140 T 170 30 T 210 140 T 260 110 T 310 115 T 350 140 L 480 140 L 480 140 L 40 140 Z"
-                          fill="url(#gradGreen)"
-                        />
-                        {/* Stroke Line */}
-                        <path
-                          d="M 40 140 Q 90 140 130 140 T 170 30 T 210 140 T 260 110 T 310 115 T 350 140 L 480 140"
-                          fill="none"
-                          stroke="#10b981"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                        />
-                        {/* Peaks */}
-                        <circle cx="170" cy="30" r="4" fill="#10b981" stroke="#ffffff" strokeWidth="2" />
-                        <circle cx="280" cy="110" r="4" fill="#10b981" stroke="#ffffff" strokeWidth="2" />
-
-                        {/* X-axis labels */}
-                        <text x="40" y="165" fontSize="10" fill="#9ca3af">Jan 2024</text>
-                        <text x="130" y="165" fontSize="10" fill="#9ca3af">Mar</text>
-                        <text x="210" y="165" fontSize="10" fill="#9ca3af">May</text>
-                        <text x="290" y="165" fontSize="10" fill="#9ca3af">Jul</text>
-                        <text x="370" y="165" fontSize="10" fill="#9ca3af">Sep</text>
-                        <text x="440" y="165" fontSize="10" fill="#9ca3af">Jan 2025</text>
-                      </svg>
-                    </div>
-                  </article>
-
-                  {/* Chart 2: Cumulative Customers */}
-                  <article className="card bg-base-100 border border-base-200 shadow-xs rounded-xl p-5">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <div className="flex items-center gap-1.5 text-xs font-semibold text-base-content/60">
-                          <span>📈</span> Cumulative platform growth
-                        </div>
-                        <strong className="text-2xl font-extrabold text-base-content">{customerProfiles.length || 48}</strong>
-                        <p className="text-xs text-base-content/50 font-medium">Total active platform accounts over time</p>
-                      </div>
-                    </div>
-                    {/* SVG Area Chart */}
-                    <div className="w-full h-48 relative">
-                      <svg viewBox="0 0 500 180" className="w-full h-full overflow-visible">
-                        <defs>
-                          <linearGradient id="gradGreen2" x1="0%" y1="0%" x2="0%" y2="100%">
-                            <stop offset="0%" stopColor="#10b981" stopOpacity="0.45" />
-                            <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
-                          </linearGradient>
-                        </defs>
-                        {/* Grid lines */}
-                        <line x1="30" y1="20" x2="490" y2="20" stroke="#e5e7eb" strokeDasharray="3 3" />
-                        <text x="15" y="24" fontSize="10" fill="#9ca3af">50</text>
-                        <line x1="30" y1="60" x2="490" y2="60" stroke="#e5e7eb" strokeDasharray="3 3" />
-                        <text x="15" y="64" fontSize="10" fill="#9ca3af">35</text>
-                        <line x1="30" y1="100" x2="490" y2="100" stroke="#e5e7eb" strokeDasharray="3 3" />
-                        <text x="15" y="104" fontSize="10" fill="#9ca3af">15</text>
-                        <line x1="30" y1="140" x2="490" y2="140" stroke="#e5e7eb" strokeDasharray="3 3" />
-                        <text x="20" y="144" fontSize="10" fill="#9ca3af">0</text>
-
-                        {/* Cumulative curve */}
-                        <path
-                          d="M 40 140 L 150 140 C 180 140, 200 100, 240 100 C 280 100, 310 50, 380 40 L 480 40 L 480 140 Z"
-                          fill="url(#gradGreen2)"
-                        />
-                        <path
-                          d="M 40 140 L 150 140 C 180 140, 200 100, 240 100 C 280 100, 310 50, 380 40 L 480 40"
-                          fill="none"
-                          stroke="#10b981"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                        />
-                        <circle cx="380" cy="40" r="4" fill="#10b981" stroke="#ffffff" strokeWidth="2" />
-
-                        {/* X-axis labels */}
-                        <text x="40" y="165" fontSize="10" fill="#9ca3af">Jan 2024</text>
-                        <text x="130" y="165" fontSize="10" fill="#9ca3af">Mar</text>
-                        <text x="210" y="165" fontSize="10" fill="#9ca3af">May</text>
-                        <text x="290" y="165" fontSize="10" fill="#9ca3af">Jul</text>
-                        <text x="370" y="165" fontSize="10" fill="#9ca3af">Sep</text>
-                        <text x="440" y="165" fontSize="10" fill="#9ca3af">Jan 2025</text>
-                      </svg>
-                    </div>
-                  </article>
-                </div>
-
+                <div className="alert alert-info mt-4 text-sm">Sales, orders, time-series customer growth, and inquiry analytics are not connected to the current data model.</div>
                 {/* Navigation Modules */}
                 <section className="section-grid">
                   <article className="card panel">
@@ -598,16 +591,16 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   <article className="card panel">
                     <header className="panel-head">
                       <div>
-                        <h2>Platform Services Status</h2>
-                        <p>Real-time infrastructure connectivity</p>
+                        <h2>Integration setup</h2>
+                        <p>Services configured outside this workspace</p>
                       </div>
                     </header>
                     <div className="queue-list">
                       {[
-                        ["Supabase PostgreSQL", "Connected (10 Tables Active)"],
-                        ["WooCommerce API", "Connected (178 Products Synced)"],
-                        ["Firebase Auth", "Active (Signed in as Admin)"],
-                        ["Mobile App Cache", "Ready for sub-100ms instant load"],
+                        ["Database", "Configure the API database connection"],
+                        ["WooCommerce", "Add server credentials and confirm route mappings"],
+                        ["Firebase", "CMS access is verified by the API session"],
+                        ["Mobile app", "Reads published content from the configured API"],
                       ].map(([label, status]) => (
                         <div className="queue-row" key={label}>
                           <i className="queue-dot" />
@@ -631,7 +624,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   <div>
                     <div className="flex items-center gap-2">
                       <h1 className="text-2xl font-bold tracking-tight">Products</h1>
-                      <span className="badge badge-sm badge-ghost font-mono">{products.length} total</span>
+                      <span className="badge badge-sm badge-ghost font-mono">{productTotal} matches</span>
                     </div>
                     {/* Sub-tabs: Products vs Collections */}
                     <div className="tabs tabs-boxed mt-2 inline-flex p-1 bg-base-200/60 rounded-lg">
@@ -663,6 +656,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       onClick={() => {
                         if (section === "products") {
                           setProductForm({ ...emptyProduct, category_id: categories[0]?.id ?? "" });
+                          setSpecificationsText("{}"); setSpecificationsError("");
                           setEditingProduct(null);
                           setShowProductForm(true);
                         } else {
@@ -685,6 +679,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       <label className="input input-bordered input-sm flex items-center gap-2 flex-1 max-w-sm rounded-lg">
                         <span aria-hidden="true" className="text-base-content/40">⌕</span>
                         <input
+                          maxLength={120}
                           placeholder={`Search ${section}...`}
                           value={query}
                           onChange={(event) => setQuery(event.target.value)}
@@ -721,6 +716,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                     </div>
 
                     <div className="flex items-center gap-3">
+                      {section === "products" && categoryHasMore && <button className="btn btn-ghost btn-xs" disabled={loading} onClick={() => void loadCatalogue(products.length, categories.length, true)}>Load more collections</button>}
                       {section === "products" && (
                         <div className="join border border-base-300 rounded-lg overflow-hidden bg-base-200/50">
                           <button
@@ -740,7 +736,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         </div>
                       )}
                       <span className="text-xs text-base-content/60 font-medium">
-                        {loading ? "Loading…" : `${section === "products" ? filteredProducts.length : categories.length} results`}
+                        {loading ? "Loading…" : section === "products" ? `Showing ${filteredProducts.length} of ${productTotal} products` : `${categories.length}${categoryHasMore ? "+" : ""} collections`}
                       </span>
                     </div>
                   </div>
@@ -762,7 +758,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                             <th>Name</th>
                             <th>Collection</th>
                             <th>Status</th>
-                            <th>Availability</th>
+                            <th>Source</th>
                             <th>Inventory</th>
                             <th>Price</th>
                             <th className="text-right">Actions</th>
@@ -818,18 +814,13 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                   </span>
                                 </td>
                                 <td>
-                                  <span className="text-xs text-base-content/70">Default Sales Channel</span>
+                                  <span className="text-xs text-base-content/70">{product.wordpress_source_id ? "WooCommerce" : "CMS managed"}</span>
                                 </td>
                                 <td>
-                                  {product.stock_status === "instock" ? (
-                                    <span className="badge badge-sm bg-emerald-100 text-emerald-800 border-0 font-medium text-[11px]">
-                                      In Stock
-                                    </span>
-                                  ) : (
-                                    <span className="badge badge-sm bg-red-100 text-red-800 border-0 font-medium text-[11px]">
-                                      Out of Stock
-                                    </span>
-                                  )}
+                                  <div className="flex flex-col items-start gap-1">
+                                    <span className={`badge badge-sm ${stockBadgeClass(product.stock_status)}`}>{stockLabel(product.stock_status)}</span>
+                                    {product.stock_quantity != null && <span className="text-xs text-base-content/60">Qty {product.stock_quantity}</span>}
+                                  </div>
                                 </td>
                                 <td>
                                   <strong className="font-bold text-base-content">
@@ -851,6 +842,9 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                     )}
                                     <button className="btn btn-ghost btn-xs" onClick={() => editProduct(product)} title="Edit">
                                       Edit
+                                    </button>
+                                    <button className="btn btn-ghost btn-xs" disabled={Boolean(product.wordpress_source_id)} title={product.wordpress_source_id ? "Managed by WooCommerce; change publication in WordPress" : product.is_published ? "Unpublish" : "Publish"} onClick={() => product.is_published ? void unpublish(`/admin/catalogue/products/${product.id}/unpublish`) : void publish(`/admin/catalogue/products/${product.id}/publish`)}>
+                                      {product.is_published ? "Unpublish" : "Publish"}
                                     </button>
                                     <button className="btn btn-ghost btn-xs text-error" onClick={() => deleteProductItem(product.id, product.name)} title="Delete">
                                       Delete
@@ -876,7 +870,6 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                           const category = categories.find((c) => c.id === product.category_id);
                           const pdfDoc = product.documents?.find((d) => d.url?.toLowerCase().endsWith(".pdf") || d.title?.toLowerCase().includes("pdf") || d.title?.toLowerCase().includes("datasheet"));
                           const pdfUrl = pdfDoc?.url || (product.wordpress_source_url?.toLowerCase().endsWith(".pdf") ? product.wordpress_source_url : null);
-                          const mrpPrice = product.price_minor ? new Intl.NumberFormat("en-IN", { style: "currency", currency: product.currency_code, maximumFractionDigits: 0 }).format((product.price_minor * 1.22) / 100) : null;
 
                           return (
                             <div
@@ -926,23 +919,11 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                     <span className="text-[17px] font-extrabold text-base-content tracking-tight">
                                       {catalogPrice(product)}
                                     </span>
-                                    {mrpPrice && (
-                                      <span className="text-xs text-base-content/40 line-through">
-                                        {mrpPrice}
-                                      </span>
-                                    )}
                                   </div>
 
                                   <div className="mt-2">
-                                    {product.stock_status === "instock" ? (
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#e6f4ea] text-[#137333]">
-                                        In Stock
-                                      </span>
-                                    ) : (
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
-                                        Out of Stock
-                                      </span>
-                                    )}
+                                    <span className={`badge badge-sm ${stockBadgeClass(product.stock_status)}`}>{stockLabel(product.stock_status)}</span>
+                                    {product.stock_quantity != null && <span className="ml-2 text-xs text-base-content/60">Qty {product.stock_quantity}</span>}
                                   </div>
 
                                   <div className="flex items-center gap-1.5 pt-3 mt-3 border-t border-base-200">
@@ -963,6 +944,14 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                       ✎ Edit
                                     </button>
                                     <button
+                                      disabled={Boolean(product.wordpress_source_id)}
+                                      onClick={() => product.is_published ? void unpublish(`/admin/catalogue/products/${product.id}/unpublish`) : void publish(`/admin/catalogue/products/${product.id}/publish`)}
+                                      className="btn btn-xs btn-outline gap-1 h-7 min-h-7 px-2 font-medium border-base-300 hover:bg-base-200"
+                                      title={product.wordpress_source_id ? "Managed by WooCommerce" : product.is_published ? "Unpublish" : "Publish"}
+                                    >
+                                      {product.is_published ? "Unpublish" : "Publish"}
+                                    </button>
+                                    <button
                                       onClick={() => deleteProductItem(product.id, product.name)}
                                       className="btn btn-xs btn-outline btn-error gap-1 h-7 min-h-7 px-2 font-medium hover:text-white"
                                     >
@@ -978,6 +967,14 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       {!filteredProducts.length && (
                         <Empty title="No products found" detail="Try a different query or click '⚡ Import Products'." />
                       )}
+                    </div>
+                  )}
+
+                  {section === "products" && productHasMore && (
+                    <div className="flex justify-center border-t border-base-200 p-4">
+                      <button className="btn btn-outline" disabled={loading} onClick={() => void loadCatalogue(products.length, categories.length, true)}>
+                        {loading ? <span className="loading loading-spinner loading-sm" /> : `Load more products (${Math.max(0, productTotal - products.length)} remaining)`}
+                      </button>
                     </div>
                   )}
 
@@ -1012,6 +1009,9 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                               <td className="text-right">
                                 <div className="flex items-center justify-end gap-1">
                                   <button className="btn btn-ghost btn-xs" onClick={() => editCategory(category)}>Edit</button>
+                                  <button className="btn btn-ghost btn-xs" disabled={Boolean(category.wordpress_source_id)} title={category.wordpress_source_id ? "Managed by WooCommerce; change publication in WordPress" : category.is_published ? "Unpublish" : "Publish"} onClick={() => category.is_published ? void unpublish(`/admin/catalogue/categories/${category.id}/unpublish`) : void publish(`/admin/catalogue/categories/${category.id}/publish`)}>
+                                    {category.is_published ? "Unpublish" : "Publish"}
+                                  </button>
                                   <button className="btn btn-ghost btn-xs text-error" onClick={() => deleteCategoryItem(category.id, category.name)}>Delete</button>
                                 </div>
                               </td>
@@ -1020,6 +1020,13 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         </tbody>
                       </table>
                       {!categories.length && <Empty title="No collections found" detail="Import WooCommerce categories or create one manually." />}
+                    </div>
+                  )}
+                  {section === "categories" && categoryHasMore && (
+                    <div className="flex justify-center border-t border-base-200 p-4">
+                      <button className="btn btn-outline" disabled={loading} onClick={() => void loadCatalogue(products.length, categories.length, true)}>
+                        {loading ? <span className="loading loading-spinner loading-sm" /> : "Load more collections"}
+                      </button>
                     </div>
                   )}
                 </article>
@@ -1033,7 +1040,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   <div>
                     <div className="breadcrumbs text-xs text-base-content/60">Collections / <strong>Customers</strong></div>
                     <h1 className="text-2xl font-bold tracking-tight">Customer Directory</h1>
-                    <p className="text-sm text-base-content/65">Verified customer profiles, business entities, and registered GST credentials.</p>
+                    <p className="text-sm text-base-content/65">Customer profile and business details supplied during account registration.</p>
                   </div>
                   <button className="btn btn-sm btn-outline" onClick={() => void loadCustomers()}>Refresh</button>
                 </div>
@@ -1052,7 +1059,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         <button
                           key={key}
                           className={`btn btn-xs rounded-lg font-semibold ${customerRoleFilter === key ? "btn-primary text-white" : "btn-ghost text-base-content/70"}`}
-                          onClick={() => setCustomerRoleFilter(key as any)}
+                          onClick={() => setCustomerRoleFilter(key as typeof customerRoleFilter)}
                         >
                           {label}
                         </button>
@@ -1075,7 +1082,6 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                     <table className="table w-full text-sm">
                       <thead className="bg-base-200/50 text-xs text-base-content/70 border-b border-base-200 uppercase tracking-wider">
                         <tr>
-                          <th className="w-10"><input type="checkbox" className="checkbox checkbox-xs rounded" /></th>
                           <th>Customer Name</th>
                           <th>Account Role</th>
                           <th>Company</th>
@@ -1096,7 +1102,6 @@ export default function AdminShell({ user, role }: { user: User; role: string })
 
                           return (
                             <tr key={profile.id} className="hover:bg-base-200/40 transition-colors">
-                              <td><input type="checkbox" className="checkbox checkbox-xs rounded" /></td>
                               <td>
                                 <div className="flex items-center gap-3">
                                   <div className="w-9 h-9 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center shrink-0 text-sm">
@@ -1143,6 +1148,13 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                     {!filteredCustomers.length && (
                       <Empty title="No customer profiles found" detail="Customer details appear after a user registers and completes onboarding in the mobile app." />
                     )}
+                    {customersHasMore && (
+                      <div className="flex justify-center border-t border-base-200 p-4">
+                        <button className="btn btn-outline btn-sm" disabled={loading} onClick={() => void loadCustomers(customerProfiles.length, true)}>
+                          {loading ? <span className="loading loading-spinner loading-sm" /> : "Load more customers"}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </article>
               </>
@@ -1159,8 +1171,23 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   </div>
                   <button className="btn btn-outline" onClick={() => void loadRequests(section === "service" ? "service" : "quote")}>Refresh</button>
                 </div>
+                <div className="card panel mb-3">
+                  <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_15rem]">
+                    <label className="form-control gap-1">
+                      <span className="label-text">Search requests</span>
+                      <input className="input input-bordered input-sm" placeholder="Customer email, model, location, or request ID" maxLength={200} value={requestQuery} onChange={(event) => setRequestQuery(event.target.value)} />
+                    </label>
+                    <label className="form-control gap-1">
+                      <span className="label-text">Filter by status</span>
+                      <select className="select select-bordered select-sm" value={requestStatuses[section === "service" ? "service" : "quote"].includes(requestStatusFilter) ? requestStatusFilter : "all"} onChange={(event) => setRequestStatusFilter(event.target.value)}>
+                        <option value="all">All statuses</option>
+                        {requestStatuses[section === "service" ? "service" : "quote"].map((status) => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                </div>
                 <div className="grid gap-3">
-                  {loading ? (
+                  {loading && customerRequests.length === 0 ? (
                     <div className="card panel empty-state"><span className="loading loading-spinner text-primary" /></div>
                   ) : customerRequests.length === 0 ? (
                     <article className="card panel"><Empty title="No requests yet" detail="Customer service requests and quote enquiries appear here after submission." /></article>
@@ -1185,19 +1212,24 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                             <label className="form-control gap-1">
                               <span className="label-text">Update status</span>
                               <select className="select select-bordered select-sm" defaultValue={record.status} id={`status-${record.id}`}>
-                                <option value="submitted">Submitted</option>
-                                <option value="in_review">In review</option>
-                                <option value="assigned">Assigned</option>
-                                <option value="waiting_for_customer">Waiting for customer</option>
-                                {record.kind === "service" ? <option value="resolved">Resolved</option> : <><option value="quote_preparing">Preparing quote</option><option value="quote_sent">Quote sent</option></>}
-                                <option value="closed">Closed</option>
+                                <option value={record.status}>{record.status.replaceAll("_", " ")} (current)</option>
+                                {(requestTransitions[record.kind]?.[record.status] ?? []).map((status) => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}
                               </select>
+                            </label>
+                            <label className="form-control gap-1">
+                              <span className="label-text">Assign to active staff</span>
+                              <select className="select select-bordered select-sm" value={requestAssignees[record.id] ?? ""} onChange={(event) => setRequestAssignees((current) => ({ ...current, [record.id]: event.target.value }))}>
+                                <option value="">Unassigned</option>
+                                {record.assigned_to && !assignableStaff.some((staff) => staff.firebase_uid === record.assigned_to) && <option value={record.assigned_to}>Inactive or unavailable · {record.assigned_to.slice(0, 8)}</option>}
+                                {assignableStaff.map((staff) => <option key={staff.firebase_uid} value={staff.firebase_uid}>{staff.display_name || staff.email || staff.firebase_uid} · {staff.role.replaceAll("_", " ")}</option>)}
+                              </select>
+                              {!assignableStaff.length && <span className="label-text-alt">No active administrators are available for assignment.</span>}
                             </label>
                             <label className="form-control gap-1">
                               <span className="label-text">Customer update note</span>
                               <textarea className="textarea textarea-bordered textarea-sm" maxLength={2000} value={requestNotes[record.id] ?? record.resolution_note ?? ""} onChange={(event) => setRequestNotes((current) => ({ ...current, [record.id]: event.target.value }))} />
                             </label>
-                            <button className="btn btn-primary btn-sm" onClick={() => { const select = document.getElementById(`status-${record.id}`) as HTMLSelectElement | null; void updateCustomerRequest(record, select?.value ?? record.status); }}>
+                              <button className="btn btn-primary btn-sm" onClick={() => { const select = document.getElementById(`status-${record.id}`) as HTMLSelectElement | null; void updateCustomerRequest(record, select?.value ?? record.status, requestAssignees[record.id] ?? ""); }}>
                               Save update
                             </button>
                           </div>
@@ -1205,7 +1237,93 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       </article>
                     ))
                   )}
+                  {requestsHasMore && (
+                    <div className="flex justify-center p-2">
+                      <button className="btn btn-outline btn-sm" disabled={loading} onClick={() => void loadRequests(section === "service" ? "service" : "quote", customerRequests.length, true)}>
+                        {loading ? <span className="loading loading-spinner loading-sm" /> : "Load older requests"}
+                      </button>
+                    </div>
+                  )}
                 </div>
+              </>
+            )}
+
+            {section === "contact_inquiries" && (
+              <>
+                <div className="page-heading">
+                  <div>
+                    <p className="eyebrow">CUSTOMER OPERATIONS</p>
+                    <h1>{title}</h1>
+                    <p>Messages from signed-in customers. Status and internal notes are recorded in the audit history.</p>
+                  </div>
+                  <button className="btn btn-outline" onClick={() => void loadContactInquiries()}>Refresh</button>
+                </div>
+                <div className="card panel mb-4">
+                  <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_13rem]">
+                    <label className="form-control gap-1">
+                      <span className="label-text">Search enquiries</span>
+                      <input className="input input-bordered input-sm" type="search" maxLength={200} value={inquiryQuery} onChange={(event) => setInquiryQuery(event.target.value)} placeholder="Name, email, company, subject or message" />
+                    </label>
+                    <label className="form-control gap-1">
+                      <span className="label-text">Status</span>
+                      <select className="select select-bordered select-sm" value={inquiryStatusFilter} onChange={(event) => setInquiryStatusFilter(event.target.value)}>
+                        <option value="all">All statuses</option>
+                        <option value="new">New</option>
+                        <option value="in_progress">In progress</option>
+                        <option value="waiting_for_customer">Waiting for customer</option>
+                        <option value="resolved">Resolved</option>
+                        <option value="closed">Closed</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+                <div className="mb-3 text-sm text-base-content/60">Showing {contactInquiries.length} matching enquiries.</div>
+                <div className="grid gap-3">
+                  {loading ? (
+                    <div className="card panel empty-state"><span className="loading loading-spinner text-primary" /></div>
+                  ) : contactInquiries.length === 0 ? (
+                    <article className="card panel"><Empty title="No contact enquiries" detail="New customer messages will appear here." /></article>
+                  ) : contactInquiries.map((record) => (
+                    <article className="card panel" key={record.id}>
+                      <header className="panel-head">
+                        <div>
+                          <h2>{record.subject || "Customer enquiry"}</h2>
+                          <p>{record.name} · {new Date(record.created_at).toLocaleString()}</p>
+                        </div>
+                        <span className={`badge ${record.status === "new" ? "badge-warning" : record.status === "resolved" || record.status === "closed" ? "badge-success" : "badge-info"}`}>{record.status.replaceAll("_", " ")}</span>
+                      </header>
+                      <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+                        <div className="space-y-2 text-sm leading-6 text-base-content/75">
+                          <div className="flex flex-wrap gap-x-4 gap-y-1">
+                            <a className="link link-primary" href={`mailto:${encodeURIComponent(record.email)}`}>{record.email}</a>
+                            <a className="link link-primary" href={`tel:${encodeURIComponent(record.phone)}`}>{record.phone}</a>
+                          </div>
+                          <p>Type: {record.inquiry_type.replaceAll("_", " ")}{record.company_name ? ` · ${record.company_name}` : ""}</p>
+                          <p className="whitespace-pre-wrap rounded-box bg-base-200/60 p-3 text-base-content">{record.message}</p>
+                          <p className="text-xs">Reference: {record.id.slice(0, 8).toUpperCase()}</p>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="form-control gap-1">
+                            <span className="label-text">Update status</span>
+                            <select className="select select-bordered select-sm" value={inquiryStatuses[record.id] ?? record.status} onChange={(event) => setInquiryStatuses((current) => ({ ...current, [record.id]: event.target.value as ContactInquiry["status"] }))}>
+                              <option value="new">New</option>
+                              <option value="in_progress">In progress</option>
+                              <option value="waiting_for_customer">Waiting for customer</option>
+                              <option value="resolved">Resolved</option>
+                              <option value="closed">Closed</option>
+                            </select>
+                          </label>
+                          <label className="form-control gap-1">
+                            <span className="label-text">Internal notes</span>
+                            <textarea className="textarea textarea-bordered textarea-sm" maxLength={2000} value={inquiryNotes[record.id] ?? ""} onChange={(event) => setInquiryNotes((current) => ({ ...current, [record.id]: event.target.value }))} />
+                          </label>
+                          <button className="btn btn-primary btn-sm" onClick={() => void updateContactInquiry(record)}>Save enquiry update</button>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                {!loading && inquiryHasMore && <div className="mt-4 flex justify-center"><button className="btn btn-outline" onClick={() => void loadContactInquiries(contactInquiries.length, true)}>Load older enquiries</button></div>}
               </>
             )}
 
@@ -1221,12 +1339,15 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   <div className="page-actions">
                     <button className="btn btn-outline" onClick={() => void saveContent()}>Save draft</button>
                     <button className="btn btn-primary" disabled={!content || content.draft_revision === 0} onClick={() => void publish(`/admin/app-config/${section}/publish`)}>Publish to App</button>
+                    {(role === "admin" || role === "super_admin") && content?.published_payload && <button className="btn btn-outline btn-error" onClick={() => void unpublish(`/admin/app-config/${section}/unpublish`)}>Unpublish from App</button>}
                   </div>
                 </div>
                 {loading ? (
                   <div className="card panel empty-state"><span className="loading loading-spinner text-primary" /></div>
                 ) : (
-                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_19rem]">
+                  <div className="grid gap-4">
+                    <ContentComparison draft={contentDraft} published={content?.published_payload ?? null} />
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_19rem]">
                     <article className="card panel">
                       <header className="panel-head">
                         <div>
@@ -1236,7 +1357,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       </header>
                       <div className="grid gap-4 p-5 sm:grid-cols-2">
                         {Object.entries(contentDraft).map(([key, value]) => (
-                          <ContentField key={key} field={key} value={value} onChange={(next) => setContentDraft((current) => ({ ...current, [key]: next }))} />
+                          <ContentField key={key} field={key} value={value} categories={categories} products={products} onChange={(next) => setContentDraft((current) => ({ ...current, [key]: next }))} />
                         ))}
                       </div>
                     </article>
@@ -1253,6 +1374,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         </div>
                       </div>
                     </aside>
+                    </div>
                   </div>
                 )}
               </>
@@ -1265,7 +1387,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   <div>
                     <p className="eyebrow">CATALOGUE SOURCE</p>
                     <h1>WooCommerce Sync & Integration</h1>
-                    <p>Live REST integration with enertechups.com (178 products, 68 categories).</p>
+                    <p>Pull published WooCommerce products and collections when server credentials and route mappings are configured.</p>
                   </div>
                   <div className="page-actions">
                     <button className="btn btn-outline" onClick={() => void wordpressPreview()}>Preview Source</button>
@@ -1297,7 +1419,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                 <td>{String(row.title ?? "—")}</td>
                                 <td>{String(row.slug ?? "—")}</td>
                                 <td className="max-w-52 truncate">{String(row.link ?? "—")}</td>
-                                <td><span className="badge badge-success badge-sm">Verified</span></td>
+                                <td><span className="badge badge-outline badge-sm">Source record</span></td>
                               </tr>
                             ))}
                           </tbody>
@@ -1316,7 +1438,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   <div>
                     <p className="eyebrow">APPROVED SUPPORT</p>
                     <h1>FAQs & Knowledge</h1>
-                    <p>Verified technical documentation and customer troubleshooting.</p>
+                    <p>Source-referenced answers shown in the customer app after publication.</p>
                   </div>
                   <button className="btn btn-primary" onClick={() => { setKnowledgeForm(emptyKnowledge); setEditingKnowledge(null); setShowKnowledgeForm(true); }}>+ Add answer</button>
                 </div>
@@ -1341,11 +1463,12 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                               <span className="block max-w-xl truncate text-xs text-base-content/60">{article.answer}</span>
                             </td>
                             <td>{article.category}</td>
-                            <td>{article.source_reference ? "Reference verified" : "Source required"}</td>
+                            <td>{article.source_reference ? "Source provided" : "Source required"}</td>
                             <td><span className={`badge ${article.is_published ? "badge-success" : "badge-ghost"}`}>{article.is_published ? "Published" : "Draft"}</span></td>
                             <td>
                               <div className="flex gap-1">
                                 <button className="btn btn-ghost btn-xs" onClick={() => { setKnowledgeForm(article); setEditingKnowledge(article.id); setShowKnowledgeForm(true); }}>Edit</button>
+                                {article.is_published && (role === "admin" || role === "super_admin") && <button className="btn btn-ghost btn-xs text-error" onClick={() => void unpublish(`/admin/knowledge/${article.id}/unpublish`)}>Unpublish</button>}
                               </div>
                             </td>
                           </tr>
@@ -1353,6 +1476,13 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       </tbody>
                     </table>
                     {!knowledgeArticles.length && <Empty title="No articles found" detail="Add approved technical answers and solutions." />}
+                    {knowledgeHasMore && (
+                      <div className="flex justify-center border-t border-base-200 p-4">
+                        <button className="btn btn-outline btn-sm" disabled={loading} onClick={() => void loadKnowledge(knowledgeArticles.length, true)}>
+                          {loading ? <span className="loading loading-spinner loading-sm" /> : "Load more answers"}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </article>
               </>
@@ -1416,9 +1546,26 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                     <h1>Audit History</h1>
                     <p>Platform modifications, publishing events, and role updates.</p>
                   </div>
-                  <button className="btn btn-outline" onClick={() => void loadAudit()}>Refresh</button>
+                  <div className="page-actions">
+                    <button className="btn btn-outline" disabled={!auditEvents.length} onClick={exportLoadedAudit}>Export loaded events</button>
+                    <button className="btn btn-outline" onClick={() => void loadAudit()}>Refresh</button>
+                  </div>
                 </div>
                 <article className="card panel">
+                  <div className="grid gap-3 border-b border-base-200 p-4 sm:grid-cols-[minmax(0,1fr)_15rem]">
+                    <label className="form-control gap-1">
+                      <span className="label-text">Search audit history</span>
+                      <input className="input input-bordered input-sm" maxLength={200} placeholder="Actor, action, entity ID, or summary" value={auditQuery} onChange={(event) => setAuditQuery(event.target.value)} />
+                    </label>
+                    <label className="form-control gap-1">
+                      <span className="label-text">Entity type</span>
+                      <select className="select select-bordered select-sm" value={auditEntityFilter} onChange={(event) => setAuditEntityFilter(event.target.value)}>
+                        <option value="all">All entities</option>
+                        {["app_config", "admin_account", "catalogue_sync", "contact_inquiry", "customer_profile", "customer_request", "knowledge_article", "media_asset", "product", "product_category"].map((entityType) => <option key={entityType} value={entityType}>{entityType.replaceAll("_", " ")}</option>)}
+                      </select>
+                    </label>
+                    <p className="text-xs text-base-content/60 sm:col-span-2">Export includes the {auditEvents.length} filtered events currently loaded. Load more before exporting larger result sets.</p>
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="table content-table">
                       <thead>
@@ -1437,6 +1584,13 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       </tbody>
                     </table>
                     {!auditEvents.length && <Empty title="No audit events recorded" detail="Audit logs are recorded whenever CMS changes are saved." />}
+                    {auditHasMore && (
+                      <div className="flex justify-center border-t border-base-200 p-4">
+                        <button className="btn btn-outline btn-sm" disabled={loading} onClick={() => void loadAudit(auditEvents.length, true)}>
+                          {loading ? <span className="loading loading-spinner loading-sm" /> : "Load older events"}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </article>
               </>
@@ -1509,7 +1663,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
             <p className="mb-4 mt-1 text-sm text-base-content/60">Changes are saved as drafts and published to the customer mobile app.</p>
             <form onSubmit={submitCategory} className="grid gap-3 sm:grid-cols-2">
               {(["name", "slug", "description", "image_url"] as const).map((field) => (
-                <label key={field} className={`form-control gap-1 ${field === "description" ? "sm:col-span-2" : ""}`}>
+                field === "image_url" ? <div key={field} className="sm:col-span-2"><ImageUrlField value={categoryForm.image_url ?? ""} onChange={(value) => setCategoryForm({ ...categoryForm, image_url: value || null })} /></div> : <label key={field} className={`form-control gap-1 ${field === "description" ? "sm:col-span-2" : ""}`}>
                   <span className="label-text font-semibold">{humanize(field)}</span>
                   {field === "description" ? (
                     <textarea className="textarea textarea-bordered" value={categoryForm.description ?? ""} onChange={(event) => setCategoryForm({ ...categoryForm, description: event.target.value })} />
@@ -1522,6 +1676,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                 <span className="label-text font-semibold">Sort order</span>
                 <input className="input input-bordered" type="number" min="0" value={categoryForm.sort_order} onChange={(event) => setCategoryForm({ ...categoryForm, sort_order: Number(event.target.value) })} />
               </label>
+              <div className="sm:col-span-2"><ContentComparison defaultOpen={false} draft={{ slug: categoryForm.slug, name: categoryForm.name, description: categoryForm.description, sort_order: categoryForm.sort_order, image_url: categoryForm.image_url }} published={"published_payload" in categoryForm ? categoryForm.published_payload ?? null : null} /></div>
               <div className="modal-action sm:col-span-2">
                 <button type="button" className="btn btn-ghost" onClick={() => setShowCategoryForm(false)}>Close</button>
                 <button className="btn btn-primary">Save Category</button>
@@ -1546,15 +1701,20 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                 </select>
               </label>
-              {(["name", "slug", "model_code", "summary", "image_url", "source_reference"] as const).map((field) => (
+              {(["name", "slug", "model_code", "summary", "source_reference"] as const).map((field) => (
                 <label key={field} className={`form-control gap-1 ${["summary", "source_reference"].includes(field) ? "sm:col-span-2" : ""}`}>
                   <span className="label-text font-semibold">{humanize(field)}</span>
-                  <input className="input input-bordered" required={field === "name" || field === "slug"} value={(productForm as typeof emptyProduct)[field] ?? ""} onChange={(event) => setProductForm({ ...productForm, [field]: event.target.value })} />
+                  <input className="input input-bordered" required={field === "name" || field === "slug" || field === "source_reference"} value={(productForm as typeof emptyProduct)[field] ?? ""} onChange={(event) => setProductForm({ ...productForm, [field]: event.target.value })} />
                 </label>
               ))}
               <label className="form-control gap-1 sm:col-span-2">
                 <span className="label-text font-semibold">Description</span>
                 <textarea className="textarea textarea-bordered min-h-24" value={productForm.description ?? ""} onChange={(event) => setProductForm({ ...productForm, description: event.target.value })} />
+              </label>
+              <div className="sm:col-span-2"><ImageUrlField value={productForm.image_url ?? ""} onChange={(value) => setProductForm({ ...productForm, image_url: value || null })} /></div>
+              <label className="form-control gap-1 sm:col-span-2">
+                <span className="label-text font-semibold">Gallery images · one HTTPS URL per line</span>
+                <textarea className="textarea textarea-bordered min-h-20" value={(productForm.gallery_images ?? []).join("\n")} onChange={(event) => setProductForm({ ...productForm, gallery_images: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} />
               </label>
               {(["applications", "features"] as const).map((field) => (
                 <label className="form-control gap-1" key={field}>
@@ -1563,25 +1723,25 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                 </label>
               ))}
               <label className="form-control gap-1">
-                <span className="label-text font-semibold">Price (₹ INR)</span>
-                <input className="input input-bordered font-mono" type="number" step="any" placeholder="e.g. 181960" value={productForm.price_minor != null ? productForm.price_minor / 100 : ""} onChange={(event) => setProductForm({ ...productForm, price_minor: event.target.value === "" ? null : Math.round(Number(event.target.value) * 100) })} />
+                <span className="label-text font-semibold">Price ({productForm.currency_code})</span>
+                <input className="input input-bordered font-mono" type="number" min="0" inputMode="decimal" step={1 / (10 ** productPriceDigits(productForm))} aria-label={`Price in ${productForm.currency_code}`} placeholder="Enter the published price" value={productForm.price_minor != null ? productForm.price_minor / (10 ** productPriceDigits(productForm)) : ""} onChange={(event) => setProductForm({ ...productForm, price_minor: event.target.value === "" ? null : Math.round(Number(event.target.value) * (10 ** productPriceDigits(productForm))) })} />
               </label>
               <label className="form-control gap-1">
                 <span className="label-text font-semibold">Stock Status</span>
-                <select className="select select-bordered" value={productForm.stock_status || "instock"} onChange={(event) => setProductForm({ ...productForm, stock_status: event.target.value as Product["stock_status"] })}>
+                <select className="select select-bordered" value={productForm.stock_status || "unknown"} onChange={(event) => setProductForm({ ...productForm, stock_status: event.target.value as Product["stock_status"] })}>
+                  <option value="unknown">Not confirmed</option>
                   <option value="instock">In Stock</option>
                   <option value="outofstock">Out of Stock</option>
                   <option value="onbackorder">Available on Request</option>
                 </select>
               </label>
-              <label className="form-control gap-1 sm:col-span-2">
-                <span className="label-text font-semibold">Datasheet / PDF Document URL</span>
-                <input className="input input-bordered" type="url" placeholder="https://enertechups.com/wp-content/uploads/manual.pdf" value={productForm.documents?.[0]?.url ?? ""} onChange={(event) => { const url = event.target.value.trim(); setProductForm({ ...productForm, documents: url ? [{ title: "Datasheet", url }] : [] }); }} />
-              </label>
+              <label className="form-control gap-1"><span className="label-text font-semibold">Stock quantity (optional)</span><input className="input input-bordered" type="number" min="0" step="1" value={productForm.stock_quantity ?? ""} onChange={(event) => setProductForm({ ...productForm, stock_quantity: event.target.value === "" ? null : Number(event.target.value) })} /></label>
+              <fieldset className="form-control gap-2 sm:col-span-2"><legend className="font-semibold">Datasheets and documents</legend>{(productForm.documents ?? []).map((document, index) => <div key={`${index}-${document.title}`} className="grid gap-2 sm:grid-cols-[1fr_2fr_auto]"><input className="input input-bordered" aria-label={`Document ${index + 1} title`} placeholder="Title" value={document.title} onChange={(event) => { const documents = [...(productForm.documents ?? [])]; documents[index] = { ...document, title: event.target.value }; setProductForm({ ...productForm, documents }); }} /><input className="input input-bordered" aria-label={`Document ${index + 1} HTTPS URL`} type="url" placeholder="https://…" value={document.url} onChange={(event) => { const documents = [...(productForm.documents ?? [])]; documents[index] = { ...document, url: event.target.value }; setProductForm({ ...productForm, documents }); }} /><button type="button" className="btn btn-ghost" aria-label={`Remove document ${index + 1}`} onClick={() => setProductForm({ ...productForm, documents: (productForm.documents ?? []).filter((_, itemIndex) => itemIndex !== index) })}>Remove</button></div>)}<button type="button" className="btn btn-outline btn-sm w-fit" onClick={() => setProductForm({ ...productForm, documents: [...(productForm.documents ?? []), { title: "", url: "" }] })}>Add document</button></fieldset>
               <label className="form-control gap-1 sm:col-span-2">
                 <span className="label-text font-semibold">Specifications (JSON Object)</span>
-                <textarea className="textarea textarea-bordered font-mono text-xs" value={textValue(productForm.specifications)} onChange={(event) => { try { setProductForm({ ...productForm, specifications: JSON.parse(event.target.value) as Record<string, unknown> }); } catch { /* preserve input */ } }} />
+                <textarea className="textarea textarea-bordered font-mono text-xs" value={specificationsText} onChange={(event) => { setSpecificationsText(event.target.value); try { const parsed = JSON.parse(event.target.value); if (parsed == null || Array.isArray(parsed) || typeof parsed !== "object") throw new Error(); setProductForm({ ...productForm, specifications: parsed as Record<string, unknown> }); setSpecificationsError(""); } catch { setSpecificationsError("Specifications must be a valid JSON object."); } }} />{specificationsError && <span role="alert" className="text-xs text-error">{specificationsError}</span>}
               </label>
+              <div className="sm:col-span-2"><ContentComparison defaultOpen={false} draft={{ category_id: productForm.category_id, slug: productForm.slug, name: productForm.name, model_code: productForm.model_code, summary: productForm.summary, description: productForm.description, applications: productForm.applications, features: productForm.features, specifications: productForm.specifications, image_url: productForm.image_url, gallery_images: productForm.gallery_images, price_minor: productForm.price_minor, currency_code: productForm.currency_code, currency_minor_unit: productForm.currency_minor_unit, stock_status: productForm.stock_status, stock_quantity: productForm.stock_quantity, documents: productForm.documents, source_reference: productForm.source_reference, wordpress_source_id: productForm.wordpress_source_id, wordpress_source_url: productForm.wordpress_source_url }} published={"published_payload" in productForm ? productForm.published_payload ?? null : null} /></div>
               <div className="modal-action sm:col-span-2">
                 <button type="button" className="btn btn-ghost" onClick={() => setShowProductForm(false)}>Close</button>
                 <button className="btn btn-primary">Save Product</button>
@@ -1600,7 +1760,10 @@ export default function AdminShell({ user, role }: { user: User; role: string })
             <form onSubmit={submitKnowledge} className="grid gap-3 sm:grid-cols-2">
               <label className="form-control gap-1"><span className="label-text">Question Title</span><input className="input input-bordered" required minLength={3} value={knowledgeForm.title} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, title: e.target.value })} /></label>
               <label className="form-control gap-1"><span className="label-text">URL Slug</span><input className="input input-bordered" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" value={knowledgeForm.slug} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, slug: e.target.value })} /></label>
+              <label className="form-control gap-1"><span className="label-text">Category</span><input className="input input-bordered" required minLength={2} maxLength={100} value={knowledgeForm.category} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, category: e.target.value })} /></label>
+              <label className="form-control gap-1"><span className="label-text">Sort order</span><input className="input input-bordered" type="number" min="0" max="10000" value={knowledgeForm.sort_order} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, sort_order: Number(e.target.value) })} /></label>
               <label className="form-control gap-1 sm:col-span-2"><span className="label-text">Answer</span><textarea className="textarea textarea-bordered min-h-36" required minLength={10} value={knowledgeForm.answer} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, answer: e.target.value })} /></label>
+              <label className="form-control gap-1 sm:col-span-2"><span className="label-text">Approved source reference</span><input className="input input-bordered" required maxLength={1000} placeholder="Document URL, manual section, or approval reference" value={knowledgeForm.source_reference ?? ""} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, source_reference: e.target.value })} /><span className="label-text-alt">A source reference is required to publish this answer.</span></label>
               <div className="modal-action sm:col-span-2"><button type="button" className="btn btn-ghost" onClick={() => setShowKnowledgeForm(false)}>Close</button><button className="btn btn-primary">Save Answer</button></div>
             </form>
           </div>
@@ -1621,10 +1784,59 @@ function Empty({ title, detail }: { title: string; detail: string }) {
   );
 }
 
-function ContentField({ field, value, onChange }: { field: string; value: unknown; onChange: (value: unknown) => void }) {
+function ContentComparison({ draft, published, defaultOpen = true }: { draft: Record<string, unknown>; published: Record<string, unknown> | null; defaultOpen?: boolean }) {
+  const keys = [...new Set([...Object.keys(draft), ...Object.keys(published ?? {})])].sort();
+  const changedCount = published ? keys.filter((key) => JSON.stringify(draft[key]) !== JSON.stringify(published[key])).length : 0;
+  const formatValue = (value: unknown) => value === undefined ? "Not set" : typeof value === "string" ? value || "(empty)" : JSON.stringify(value, null, 2);
+  return (
+    <details open={defaultOpen} className="card panel">
+      <summary className="panel-head cursor-pointer list-none">
+        <div>
+          <h2>Draft vs published</h2>
+          <p>{published ? `${changedCount} changed field${changedCount === 1 ? "" : "s"} · compare what customers see before publishing` : "No published version yet · the app still uses its local defaults"}</p>
+        </div>
+        <span className={`badge ${changedCount ? "badge-warning" : "badge-success"}`}>{published ? changedCount ? "Changes pending" : "In sync" : "Not published"}</span>
+      </summary>
+      <div className="grid gap-3 p-4 xl:grid-cols-2">
+        {keys.map((key) => {
+          const changed = published !== null && JSON.stringify(draft[key]) !== JSON.stringify(published[key]);
+          return (
+            <section key={key} className={`rounded-box border p-3 ${changed ? "border-warning/50 bg-warning/5" : "border-base-300"}`}>
+              <h3 className="mb-2 text-sm font-semibold">{humanize(key)}{changed && <span className="ml-2 badge badge-warning badge-xs">Changed</span>}</h3>
+              <div className="grid gap-2 md:grid-cols-2">
+                <div className="min-w-0">
+                  <p className="mb-1 text-xs font-semibold text-base-content/60">Draft</p>
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-base-200/60 p-2 text-xs">{formatValue(draft[key])}</pre>
+                </div>
+                <div className="min-w-0">
+                  <p className="mb-1 text-xs font-semibold text-base-content/60">Published</p>
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-base-200/60 p-2 text-xs">{formatValue(published?.[key])}</pre>
+                </div>
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
+function ImageUrlField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  return <label className="form-control gap-2"><span className="label-text font-semibold">Image URL</span><input className="input input-bordered" type="url" value={value} onChange={(event) => onChange(event.target.value)} placeholder="https://…" /><input className="file-input file-input-bordered file-input-sm w-full" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Upload image" disabled={uploading} onChange={async (event) => { const file = event.target.files?.[0]; const authUser = getFirebaseAuth()?.currentUser; if (!file || !authUser) return; setUploading(true); setError(""); try { const asset = await uploadMedia(authUser, file); onChange(asset.url); } catch (cause) { setError(cause instanceof Error ? cause.message : "Image upload failed."); } finally { setUploading(false); event.target.value = ""; } }} />{uploading && <span className="label-text-alt">Uploading image…</span>}{error && <span role="alert" className="text-xs text-error">{error}</span>}{value.startsWith("https://") && <div role="img" aria-label="Image preview" className="max-h-40 min-h-20 w-full rounded-lg border border-base-300 bg-contain bg-left bg-no-repeat" style={{ backgroundImage: `url("${value.replaceAll('"', '')}")` }} />}</label>;
+}
+
+function ContentField({ field, value, categories, products, onChange }: { field: string; value: unknown; categories: Category[]; products: Product[]; onChange: (value: unknown) => void }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   if (typeof value === "boolean") return <label className="label cursor-pointer justify-start gap-3 rounded-lg border border-base-300 p-3"><input className="toggle toggle-primary" type="checkbox" checked={value} onChange={(event) => onChange(event.target.checked)} /><span className="label-text">{humanize(field)}</span></label>;
+  if (field === "featured_category_ids" || field === "featured_product_ids") {
+    const options = (field === "featured_category_ids" ? categories : products).filter((item) => item.is_published);
+    const selected = new Set((Array.isArray(value) ? value : []).filter((item: unknown): item is string => typeof item === "string"));
+    const label = field === "featured_category_ids" ? "Featured collections" : "Featured products";
+    return <fieldset className="form-control gap-2 sm:col-span-2"><legend className="font-semibold">{label}</legend><p className="text-xs text-base-content/60">Leave all unchecked to show every published {field === "featured_category_ids" ? "collection" : "product"} on Home.</p><div className="grid max-h-56 gap-1 overflow-y-auto rounded-lg border border-base-300 p-2 sm:grid-cols-2">{options.length ? options.map((item) => <label key={item.id} className="label cursor-pointer justify-start gap-2 rounded-md px-2 py-1"><input className="checkbox checkbox-sm checkbox-primary" type="checkbox" checked={selected.has(item.id)} onChange={(event) => { const next = new Set(selected); if (event.target.checked) next.add(item.id); else next.delete(item.id); onChange([...next]); }} /><span className="label-text">{item.name}</span></label>) : <span className="p-2 text-xs text-base-content/60">Publish items in the catalogue first.</span>}</div></fieldset>;
+  }
   if (Array.isArray(value)) return <label className="form-control gap-1 sm:col-span-2"><span className="label-text font-semibold">{humanize(field)} · one per line</span><textarea className="textarea textarea-bordered min-h-20" value={value.join("\n")} onChange={(event) => onChange(event.target.value.split("\n").map((item) => item.trim()).filter(Boolean))} /></label>;
   const choices: Record<string, string[]> = { hero_cta_target: ["products", "solution_finder", "quote", "support"], integration: ["iframe", "hosted_widget"] };
   if (choices[field]) return <label className="form-control gap-1"><span className="label-text font-semibold">{humanize(field)}</span><select className="select select-bordered" value={String(value)} onChange={(event) => onChange(event.target.value)}>{choices[field].map((choice) => <option key={choice} value={choice}>{humanize(choice)}</option>)}</select></label>;

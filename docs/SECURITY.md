@@ -6,9 +6,10 @@
 - Firebase ID tokens are verified on protected routes with revocation checks. CMS roles are active server-side records or bootstrap super-admin UIDs; there is no public CMS signup.
 - Admin account provisioning is super-admin-only. Customer profile/request directory access is admin/super-admin-only; customer request reads are scoped by Firebase UID.
 - Customer onboarding and service/quote submissions require verified Firebase email. The submitted profile email must match the token identity.
+- Contact enquiries require a verified Firebase identity; the server stores the verified token email and caps each account at five submissions per hour. Admin status and note changes are audited.
 - Product, category, FAQ, and app content changes are audited. User-facing app configuration is published-only.
 - WooCommerce records are pulled with server-only read-only credentials. WooCommerce-owned products/categories cannot be edited or unpublished from CMS; update them in WordPress and sync.
-- Chat is published only when the app URL and widget script use HTTPS hosts in `CHAT_ALLOWED_HOSTS`. The WebView navigates only to those allowlisted hosts. The widget key is kept in the API environment and sent only to the enabled, published widget integration.
+- Chat is published only when the app URL and widget script use HTTPS hosts in `CHAT_ALLOWED_HOSTS`. The WebView navigates only to those allowlisted hosts. Only a provider-designated public embed key may be configured as `CHAT_WIDGET_PUBLIC_KEY`; clients can read it when chat is enabled and published.
 - CMS asset uploads accept PNG, JPEG, and WebP signatures, cap file size at 10 MB, and write to Supabase Storage with the server-only service key.
 
 ## Production work still required
@@ -19,3 +20,4 @@
 - Add malware scanning and private file storage/authorized download flows before allowing customer uploads or private manuals. Current asset uploads are for public images; product PDF links are public WordPress URLs.
 - Add rate limits, abuse controls, secure response headers, monitoring, dependency/secret scanning, offsite backup, and restore/rollback evidence.
 - Complete staging acceptance and release review before publishing a production domain or signed APK.
+- Rotate/revoke previously committed browser/database credentials and the former chat-widget key. Source removal does not revoke credentials or erase Git history and already-built client artifacts.

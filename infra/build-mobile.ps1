@@ -13,8 +13,17 @@ foreach ($line in Get-Content -LiteralPath $envFile) {
 $required = @("FIREBASE_API_KEY", "FIREBASE_APP_ID", "FIREBASE_PROJECT_ID", "FIREBASE_MESSAGING_SENDER_ID", "GOOGLE_SERVER_CLIENT_ID", "API_BASE_URL")
 $missing = @($required | Where-Object { -not $values[$_] })
 if ($missing.Count -gt 0) { throw "APK build stopped: configure $($missing -join ', ') in apps/mobile/.env first." }
+$apiUri = $null
+if (-not [Uri]::TryCreate($values["API_BASE_URL"], [UriKind]::Absolute, [ref]$apiUri) -or $apiUri.Scheme -ne "https" -or $apiUri.Host -in @("localhost", "127.0.0.1", "10.0.2.2")) {
+    throw "Release APK build stopped: API_BASE_URL must be the HTTPS production or staging API endpoint, not a local development URL."
+}
 $forbidden = @($values.Keys | Where-Object { $_ -match 'SUPABASE|DATABASE_URL|SERVICE_ACCOUNT|WORDPRESS|APPLICATION_PASSWORD' })
 if ($forbidden.Count -gt 0) { throw "Remove server-only values from apps/mobile/.env: $($forbidden -join ', ')." }
+
+$signingVariables = @("ANDROID_KEYSTORE_PATH", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
+$missingSigning = @($signingVariables | Where-Object { -not [Environment]::GetEnvironmentVariable($_) })
+if ($missingSigning.Count -gt 0) { throw "Production APK build stopped: configure the existing production signing identity in environment variables: $($missingSigning -join ', '). Do not put passwords in apps/mobile/.env." }
+if (-not (Test-Path -LiteralPath $env:ANDROID_KEYSTORE_PATH -PathType Leaf)) { throw "Production APK build stopped: ANDROID_KEYSTORE_PATH does not point to an existing keystore file." }
 
 $env:APPDATA = Join-Path $projectRoot ".dev\appdata"
 $env:LOCALAPPDATA = Join-Path $projectRoot ".dev\local-appdata"

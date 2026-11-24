@@ -5,6 +5,23 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+val releaseSigningEnvironment = listOf(
+    "ANDROID_KEYSTORE_PATH",
+    "ANDROID_KEYSTORE_PASSWORD",
+    "ANDROID_KEY_ALIAS",
+    "ANDROID_KEY_PASSWORD",
+).associateWith { name -> System.getenv(name)?.takeIf(String::isNotBlank) }
+val releaseSigningConfigured = releaseSigningEnvironment.values.all { it != null }
+val releaseSigningPartiallyConfigured = releaseSigningEnvironment.values.any { it != null } && !releaseSigningConfigured
+val releaseTaskRequested = gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+
+if (releaseSigningPartiallyConfigured) {
+    throw GradleException("Production release signing is incomplete. Configure the Android keystore path, store password, key alias, and key password through environment variables.")
+}
+if (releaseTaskRequested && !releaseSigningConfigured) {
+    throw GradleException("A production release keystore is required to build a release APK. Configure ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD.")
+}
+
 android {
     namespace = "com.enertech.enertech_customer"
     compileSdk = flutter.compileSdkVersion
@@ -13,6 +30,17 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    if (releaseSigningConfigured) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseSigningEnvironment.getValue("ANDROID_KEYSTORE_PATH")!!)
+                storePassword = releaseSigningEnvironment.getValue("ANDROID_KEYSTORE_PASSWORD")!!
+                keyAlias = releaseSigningEnvironment.getValue("ANDROID_KEY_ALIAS")!!
+                keyPassword = releaseSigningEnvironment.getValue("ANDROID_KEY_PASSWORD")!!
+            }
+        }
     }
 
     defaultConfig {
@@ -32,9 +60,7 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            if (releaseSigningConfigured) signingConfig = signingConfigs.getByName("release")
         }
     }
 }

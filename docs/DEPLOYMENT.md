@@ -22,21 +22,25 @@ Configure server runtime secrets in Coolify:
 - Firebase server: `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, and `BOOTSTRAP_SUPER_ADMIN_UIDS` for the first super-admin.
 - API: `API_CORS_ORIGINS` with the exact CMS origin.
 - WooCommerce server: `WORDPRESS_API_BASE_URL=https://enertechups.com/wp-json`, read-only `WORDPRESS_CONSUMER_KEY` and `WORDPRESS_CONSUMER_SECRET`, and the routes/mappings in `infra/coolify/.env.example`.
-- Chat widget server: `CHAT_ALLOWED_HOSTS`, `CHAT_WIDGET_SCRIPT_URL`, and `CHAT_PROVIDER_API_KEY`. The hosted widget key is returned by the published app-config endpoint only while chat is enabled and published.
+- Chat widget server: `CHAT_ALLOWED_HOSTS`, `CHAT_WIDGET_SCRIPT_URL`, and `CHAT_WIDGET_PUBLIC_KEY`. Only use a provider-designated public embed key here; the app-config endpoint returns it to app clients while chat is enabled and published. Never configure a private/server API key.
 
-The CMS image build requires the public build values `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID`, and `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`. Changing these values requires rebuilding the CMS image. They are not server credentials.
+The CMS image build requires the public build values `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID`, and `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`. Production builds require an HTTPS API URL. For temporary Coolify `sslip.io` testing only, set `ALLOW_HTTP_TEST_API=true`; this permits HTTP only when the API hostname ends in `.sslip.io`. Leave it false for production. Coolify-generated `sslip.io` URLs use HTTP, so this test deployment cannot be used for a production APK. Changing these values requires rebuilding the CMS image. They are not server credentials.
 
 Use Supabase backups and verify a restore before production. Configure the CMS domain/TLS, firewall, monitoring, retention, and rollback process in Coolify before launch.
 
 ## Android package
 
-After Firebase and the production API URL are configured in ignored `apps/mobile/.env`, run from the workspace root:
+After Firebase and the production API URL are configured in ignored `apps/mobile/.env`, run from the workspace root. Set `API_BASE_URL` to the Coolify API service's public HTTPS domain followed by `/api/v1` (for example, `https://api.example.com/api/v1`; replace the example with the real API domain). You can find the domain in Coolify under the EnerTech API service's Domains settings and confirm the host with `/health/ready`.
+
+Release builds also require the existing production upload/release keystore. Set `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` in the build environment; keep passwords out of mobile `.env` and source control. Use the same signing identity as the app already distributed to customers. The build stops if the endpoint is local or HTTPS configuration/signing values are missing.
+
+Run from the workspace root:
 
 ```powershell
 infra\build-mobile.ps1
 ```
 
-Output: `apps/mobile/build/app/outputs/flutter-apk/app-debug.apk`. The script stops if required public Firebase/API values are missing or server-only values appear in the mobile environment. The debug build is for testing; production release signing and package identity still need EnerTech-owned decisions.
+Output: `update.apk` at the workspace root (copied from `apps/mobile/build/app/outputs/flutter-apk/app-release.apk`). The script stops if required public Firebase/API values are missing, the API URL is not HTTPS, or server-only values appear in the mobile environment. Production release signing and package identity still need EnerTech-owned decisions.
 
 ## Current gate
 

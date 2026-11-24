@@ -22,7 +22,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Internal error processing %s %s: %s", request.method, request.url.path, exc)
     return JSONResponse(
         status_code=500,
-        content={"detail": f"{type(exc).__name__}: {str(exc)}"}
+        content={"detail": "Internal server error."}
     )
 
 app.include_router(router, prefix="/api/v1")

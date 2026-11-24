@@ -12,6 +12,7 @@ class ProductSummary {
     this.currencyMinorUnit = 2,
     this.stockStatus = 'unknown',
     this.stockQuantity,
+    this.documents = const [],
   });
 
   final String id;
@@ -26,6 +27,7 @@ class ProductSummary {
   final int currencyMinorUnit;
   final String stockStatus;
   final int? stockQuantity;
+  final List<ProductDocument> documents;
 
   factory ProductSummary.fromJson(Map<String, dynamic> json) {
     return ProductSummary(
@@ -41,19 +43,40 @@ class ProductSummary {
       currencyMinorUnit: json['currency_minor_unit'] as int? ?? 2,
       stockStatus: json['stock_status'] as String? ?? 'unknown',
       stockQuantity: json['stock_quantity'] as int?,
+      documents: (json['documents'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(ProductDocument.fromJson)
+          .toList(growable: false),
     );
   }
 }
 
 class ProductDetails extends ProductSummary {
-  const ProductDetails({required super.id, required super.slug, required super.name, required super.categoryId, super.modelCode, super.summary, super.imageUrl, super.priceMinor, super.currencyCode, super.currencyMinorUnit, super.stockStatus, super.stockQuantity, this.description, this.applications = const [], this.features = const [], this.specifications = const {}, this.galleryImages = const [], this.documents = const []});
+  const ProductDetails({
+    required super.id,
+    required super.slug,
+    required super.name,
+    required super.categoryId,
+    super.modelCode,
+    super.summary,
+    super.imageUrl,
+    super.priceMinor,
+    super.currencyCode,
+    super.currencyMinorUnit,
+    super.stockStatus,
+    super.stockQuantity,
+    super.documents = const [],
+    this.description,
+    this.applications = const [],
+    this.features = const [],
+    this.specifications = const {},
+    this.galleryImages = const [],
+  });
   final String? description;
   final List<String> applications;
   final List<String> features;
   final Map<String, dynamic> specifications;
   final List<String> galleryImages;
-  final List<ProductDocument> documents;
-
   factory ProductDetails.fromJson(Map<String, dynamic> json) => ProductDetails(
     id: json['id'] as String,
     slug: json['slug'] as String,
@@ -67,12 +90,22 @@ class ProductDetails extends ProductSummary {
     currencyMinorUnit: json['currency_minor_unit'] as int? ?? 2,
     stockStatus: json['stock_status'] as String? ?? 'unknown',
     stockQuantity: json['stock_quantity'] as int?,
+    documents: (json['documents'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(ProductDocument.fromJson)
+        .toList(growable: false),
     description: json['description'] as String?,
-    applications: (json['applications'] as List<dynamic>? ?? const []).whereType<String>().toList(growable: false),
-    features: (json['features'] as List<dynamic>? ?? const []).whereType<String>().toList(growable: false),
-    specifications: (json['specifications'] as Map<String, dynamic>?) ?? const {},
-    galleryImages: (json['gallery_images'] as List<dynamic>? ?? const []).whereType<String>().toList(growable: false),
-    documents: (json['documents'] as List<dynamic>? ?? const []).whereType<Map<String, dynamic>>().map(ProductDocument.fromJson).toList(growable: false),
+    applications: (json['applications'] as List<dynamic>? ?? const [])
+        .whereType<String>()
+        .toList(growable: false),
+    features: (json['features'] as List<dynamic>? ?? const [])
+        .whereType<String>()
+        .toList(growable: false),
+    specifications:
+        (json['specifications'] as Map<String, dynamic>?) ?? const {},
+    galleryImages: (json['gallery_images'] as List<dynamic>? ?? const [])
+        .whereType<String>()
+        .toList(growable: false),
   );
 }
 
@@ -80,7 +113,11 @@ class ProductDocument {
   const ProductDocument({required this.title, required this.url});
   final String title;
   final String url;
-  factory ProductDocument.fromJson(Map<String, dynamic> json) => ProductDocument(title: json['title'] as String? ?? 'Product document', url: json['url'] as String? ?? '');
+  factory ProductDocument.fromJson(Map<String, dynamic> json) =>
+      ProductDocument(
+        title: json['title'] as String? ?? 'Product document',
+        url: json['url'] as String? ?? '',
+      );
 }
 
 class ProductPageData {
@@ -92,14 +129,22 @@ class ProductPageData {
   factory ProductPageData.fromJson(Map<String, dynamic> json) {
     final rows = json['items'] as List<dynamic>? ?? const [];
     return ProductPageData(
-      items: rows.map((row) => ProductSummary.fromJson(row as Map<String, dynamic>)).toList(growable: false),
+      items: rows
+          .map((row) => ProductSummary.fromJson(row as Map<String, dynamic>))
+          .toList(growable: false),
       total: json['total'] as int? ?? 0,
     );
   }
 }
 
 class ProductCategory {
-  const ProductCategory({required this.id, required this.slug, required this.name, this.description, this.imageUrl});
+  const ProductCategory({
+    required this.id,
+    required this.slug,
+    required this.name,
+    this.description,
+    this.imageUrl,
+  });
 
   final String id;
   final String slug;
@@ -107,11 +152,12 @@ class ProductCategory {
   final String? description;
   final String? imageUrl;
 
-  factory ProductCategory.fromJson(Map<String, dynamic> json) => ProductCategory(
-    id: json['id'] as String,
-    slug: json['slug'] as String,
-    name: json['name'] as String,
-    description: json['description'] as String?,
-    imageUrl: json['image_url'] as String?,
-  );
+  factory ProductCategory.fromJson(Map<String, dynamic> json) =>
+      ProductCategory(
+        id: json['id'] as String,
+        slug: json['slug'] as String,
+        name: json['name'] as String,
+        description: json['description'] as String?,
+        imageUrl: json['image_url'] as String?,
+      );
 }

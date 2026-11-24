@@ -39,7 +39,9 @@ class Settings(BaseSettings):
     wordpress_source_specifications_field: str = "attributes"
     chat_allowed_hosts: str = ""
     chat_widget_script_url: str = ""
-    chat_provider_api_key: str = ""
+    # This value is sent to the customer app, so only a provider's public
+    # browser/embed key may be configured here. Never use a server secret.
+    chat_widget_public_key: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

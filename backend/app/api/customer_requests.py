@@ -1,22 +1,38 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.auth import AdminIdentity, Identity, get_current_identity, require_admin_roles
 from app.db.session import get_session
-from app.models import AuditEvent, CustomerRequest, ContactInquiry
+from app.models import AdminAccount, AuditEvent, CustomerRequest, ContactInquiry
 from app.schemas.cms import CustomerRequestAdmin, CustomerRequestPublic, CustomerRequestUpdate, QuoteRequestWrite, ServiceRequestWrite, ContactInquiryCreate, ContactInquiryAdmin, ContactInquiryUpdate
 
 router = APIRouter(tags=["customer requests"])
 ADMIN_ROLES = ("content_editor", "admin", "super_admin")
 REQUEST_ROLES = ("admin", "super_admin")
-STATUS_BY_KIND = {
-    "service": {"in_review", "assigned", "waiting_for_customer", "resolved", "closed"},
-    "quote": {"in_review", "assigned", "waiting_for_customer", "quote_preparing", "quote_sent", "closed"},
+REQUEST_TRANSITIONS = {
+    "service": {
+        "submitted": {"in_review", "assigned", "waiting_for_customer", "closed"},
+        "in_review": {"assigned", "waiting_for_customer", "resolved", "closed"},
+        "assigned": {"in_review", "waiting_for_customer", "resolved", "closed"},
+        "waiting_for_customer": {"in_review", "assigned", "resolved", "closed"},
+        "resolved": {"closed"},
+        "closed": set(),
+    },
+    "quote": {
+        "submitted": {"in_review", "assigned", "waiting_for_customer", "quote_preparing", "closed"},
+        "in_review": {"assigned", "waiting_for_customer", "quote_preparing", "quote_sent", "closed"},
+        "assigned": {"in_review", "waiting_for_customer", "quote_preparing", "quote_sent", "closed"},
+        "waiting_for_customer": {"in_review", "assigned", "quote_preparing", "quote_sent", "closed"},
+        "quote_preparing": {"waiting_for_customer", "quote_sent", "closed"},
+        "quote_sent": {"waiting_for_customer", "closed"},
+        "closed": set(),
+    },
 }
+CONTACT_INQUIRY_STATUSES = {"new", "in_progress", "waiting_for_customer", "resolved", "closed"}
 
 
 def _require_verified_customer(identity: Identity) -> None:
@@ -92,7 +108,8 @@ def my_requests(
 @router.get("/admin/requests", response_model=list[CustomerRequestAdmin])
 def admin_requests(
     kind: str | None = Query(default=None, pattern="^(service|quote)$"),
-    state: str | None = Query(default=None, max_length=40),
+    status_filter: str | None = Query(default=None, alias="status", pattern="^(submitted|in_review|assigned|waiting_for_customer|resolved|quote_preparing|quote_sent|closed)$"),
+    q: str | None = Query(default=None, max_length=200),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
@@ -101,10 +118,18 @@ def admin_requests(
     query = select(CustomerRequest)
     if kind:
         query = query.where(CustomerRequest.kind == kind)
-    if state:
-        query = query.where(CustomerRequest.status == state)
+    if status_filter:
+        query = query.where(CustomerRequest.status == status_filter)
+    if q and q.strip():
+        term = f"%{q.strip()}%"
+        query = query.where(or_(
+            CustomerRequest.customer_email.ilike(term),
+            CustomerRequest.customer_uid.ilike(term),
+            cast(CustomerRequest.id, String).ilike(term),
+            cast(CustomerRequest.payload, String).ilike(term),
+        ))
     _ = admin_identity
-    return [_to_admin(record) for record in session.scalars(query.order_by(CustomerRequest.created_at.desc()).limit(limit).offset(offset))]
+    return [_to_admin(record) for record in session.scalars(query.order_by(CustomerRequest.created_at.desc(), CustomerRequest.id.desc()).limit(limit).offset(offset))]
 
 
 @router.patch("/admin/requests/{request_id}", response_model=CustomerRequestAdmin)
@@ -117,16 +142,34 @@ def update_request(
     record = session.get(CustomerRequest, request_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Request not found")
-    if body.status not in STATUS_BY_KIND[record.kind]:
-        raise HTTPException(status_code=422, detail="This status is not available for the selected request type")
+    if body.status != record.status and body.status not in REQUEST_TRANSITIONS[record.kind].get(record.status, set()):
+        raise HTTPException(status_code=409, detail="This request cannot move from its current status to the selected status")
+    next_assignee = body.assigned_to if "assigned_to" in body.model_fields_set else record.assigned_to
+    next_note = body.resolution_note if "resolution_note" in body.model_fields_set else record.resolution_note
+    if body.status == "assigned" and not next_assignee:
+        raise HTTPException(status_code=422, detail="Assign this request to an active CMS administrator before using the assigned status")
+    if next_assignee and (next_assignee != record.assigned_to or body.status == "assigned"):
+        assignee = session.scalar(select(AdminAccount).where(
+            AdminAccount.firebase_uid == next_assignee,
+            AdminAccount.is_active.is_(True),
+            AdminAccount.role.in_(["admin", "super_admin"]),
+        ))
+        if assignee is None:
+            raise HTTPException(status_code=422, detail="Choose an active CMS administrator for assignment")
     previous = record.status
+    previous_assignee = record.assigned_to
     record.status = body.status
-    record.assigned_to = body.assigned_to
-    record.resolution_note = body.resolution_note
+    record.assigned_to = next_assignee
+    record.resolution_note = next_note
     record.updated_at = datetime.now(timezone.utc)
     session.add(AuditEvent(
         actor_uid=admin.uid, action="customer_request.updated", entity_type="customer_request",
-        entity_id=str(record.id), change_summary={"previous_status": previous, "status": body.status, "assigned": body.assigned_to is not None},
+        entity_id=str(record.id), change_summary={
+            "previous_status": previous,
+            "status": body.status,
+            "previous_assignee": previous_assignee,
+            "assignee": next_assignee,
+        },
     ))
     session.commit()
     session.refresh(record)
@@ -136,13 +179,21 @@ def update_request(
 @router.post("/requests/contact-inquiry", status_code=status.HTTP_201_CREATED, response_model=dict[str, object])
 def submit_contact_inquiry(
     body: ContactInquiryCreate,
+    identity: Identity = Depends(get_current_identity),
     session: Session = Depends(get_session),
 ) -> dict[str, object]:
+    _require_verified_customer(identity)
     now = datetime.now(timezone.utc)
+    recent_count = session.scalar(select(func.count()).select_from(ContactInquiry).where(
+        ContactInquiry.email == identity.email,
+        ContactInquiry.created_at >= now - timedelta(hours=1),
+    )) or 0
+    if recent_count >= 5:
+        raise HTTPException(status_code=429, detail="You have sent several enquiries recently. Please try again later.")
     inquiry = ContactInquiry(
         id=uuid4(),
         name=body.name,
-        email=body.email,
+        email=identity.email or "",
         phone=body.phone,
         company_name=body.company_name,
         subject=body.subject,
@@ -153,13 +204,21 @@ def submit_contact_inquiry(
         updated_at=now,
     )
     session.add(inquiry)
+    session.add(AuditEvent(
+        actor_uid=identity.uid,
+        action="contact_inquiry.submitted",
+        entity_type="contact_inquiry",
+        entity_id=str(inquiry.id),
+        change_summary={"inquiry_type": inquiry.inquiry_type},
+    ))
     session.commit()
     return {"id": str(inquiry.id), "status": "received", "message": "Thank you for reaching out. We will get back to you shortly."}
 
 
 @router.get("/admin/contact-inquiries", response_model=list[ContactInquiryAdmin])
 def admin_contact_inquiries(
-    status_filter: str | None = Query(default=None, alias="status", max_length=40),
+    status_filter: str | None = Query(default=None, alias="status", pattern="^(new|in_progress|waiting_for_customer|resolved|closed)$"),
+    q: str | None = Query(default=None, max_length=200),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
@@ -168,6 +227,13 @@ def admin_contact_inquiries(
     query = select(ContactInquiry)
     if status_filter:
         query = query.where(ContactInquiry.status == status_filter)
+    if q and q.strip():
+        term = f"%{q.strip()}%"
+        query = query.where(or_(
+            ContactInquiry.name.ilike(term), ContactInquiry.email.ilike(term),
+            ContactInquiry.phone.ilike(term), ContactInquiry.company_name.ilike(term),
+            ContactInquiry.subject.ilike(term), ContactInquiry.message.ilike(term),
+        ))
     _ = admin_identity
     records = session.scalars(query.order_by(ContactInquiry.created_at.desc()).limit(limit).offset(offset))
     return [
@@ -199,13 +265,15 @@ def update_contact_inquiry(
     record = session.get(ContactInquiry, inquiry_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Inquiry not found")
+    if body.status not in CONTACT_INQUIRY_STATUSES:
+        raise HTTPException(status_code=422, detail="Choose a supported contact inquiry status")
     record.status = body.status
     if body.notes is not None:
         record.notes = body.notes
     record.updated_at = datetime.now(timezone.utc)
     session.add(AuditEvent(
         actor_uid=admin.uid, action="contact_inquiry.updated", entity_type="contact_inquiry",
-        entity_id=str(record.id), change_summary={"status": body.status},
+        entity_id=str(record.id), change_summary={"status": body.status, "notes_updated": body.notes is not None},
     ))
     session.commit()
     session.refresh(record)

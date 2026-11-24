@@ -4,34 +4,26 @@ import { connectAuthEmulator, getAuth, type Auth } from "firebase/auth";
 let app: FirebaseApp | null = null;
 let auth: Auth | null = null;
 
-const FIREBASE_API_KEY =
-  process.env.NEXT_PUBLIC_FIREBASE_API_KEY ||
-  "AIzaSyAUbtbOGwZwjLLAacs5VZtJKwSZfyNAxW4";
-const FIREBASE_AUTH_DOMAIN =
-  process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN ||
-  "enertech-ups.firebaseapp.com";
-const FIREBASE_PROJECT_ID =
-  process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "enertech-ups";
-const FIREBASE_APP_ID =
-  process.env.NEXT_PUBLIC_FIREBASE_APP_ID ||
-  "1:423316048940:web:a7ea828ca35de54fea1589";
-const FIREBASE_MESSAGING_SENDER_ID =
-  process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "423316048940";
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "",
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "",
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "",
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "",
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "",
+};
+
+export function hasFirebaseConfig(): boolean {
+  return Object.values(firebaseConfig).every((value) => value.trim().length > 0);
+}
 
 export function getFirebaseAuth(): Auth | null {
-  if (typeof window === "undefined") return null;
+  if (typeof window === "undefined" || !hasFirebaseConfig()) return null;
 
   try {
     if (!app) {
       app = getApps().length
         ? getApp()
-        : initializeApp({
-            apiKey: FIREBASE_API_KEY,
-            authDomain: FIREBASE_AUTH_DOMAIN,
-            projectId: FIREBASE_PROJECT_ID,
-            appId: FIREBASE_APP_ID,
-            messagingSenderId: FIREBASE_MESSAGING_SENDER_ID,
-          });
+        : initializeApp(firebaseConfig);
     }
     if (!auth) {
       auth = getAuth(app);
@@ -45,8 +37,4 @@ export function getFirebaseAuth(): Auth | null {
     console.error("Firebase auth initialization error:", error);
     return null;
   }
-}
-
-export function hasFirebaseConfig(): boolean {
-  return true;
 }

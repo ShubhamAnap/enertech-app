@@ -37,16 +37,19 @@ class CustomerProfile {
 
   bool get isBusiness => customerType != 'end_user';
 
-  factory CustomerProfile.fromJson(Map<String, dynamic> json) => CustomerProfile(
-    id: json['id'] as String? ?? 'profile-${DateTime.now().millisecondsSinceEpoch}',
-    customerType: json['customer_type'] as String? ?? 'end_user',
-    name: json['name'] as String? ?? 'Customer',
-    mobileNumber: json['mobile_number'] as String? ?? '',
-    email: json['email'] as String? ?? '',
-    location: json['location'] as String? ?? '',
-    companyName: json['company_name'] as String?,
-    gstNumber: json['gst_number'] as String?,
-  );
+  factory CustomerProfile.fromJson(Map<String, dynamic> json) =>
+      CustomerProfile(
+        id:
+            json['id'] as String? ??
+            'profile-${DateTime.now().millisecondsSinceEpoch}',
+        customerType: json['customer_type'] as String? ?? 'end_user',
+        name: json['name'] as String? ?? 'Customer',
+        mobileNumber: json['mobile_number'] as String? ?? '',
+        email: json['email'] as String? ?? '',
+        location: json['location'] as String? ?? '',
+        companyName: json['company_name'] as String?,
+        gstNumber: json['gst_number'] as String?,
+      );
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -65,18 +68,11 @@ class CustomerProfileRepository {
 
   final String? _baseUrl;
 
-  static CustomerProfile? _cachedProfile;
-  static bool _offlineBypass = false;
+  static final Map<String, CustomerProfile> _cachedProfiles = {};
   static String? _customBaseUrl;
 
   static const String _prefProfilePrefix = 'enertech_profile_';
   static const String _prefOnboardingPrefix = 'enertech_onboarding_done_';
-
-  static void setOfflineBypass(bool value) {
-    _offlineBypass = value;
-  }
-
-  static bool get isOfflineBypass => _offlineBypass;
 
   static void setCustomBaseUrl(String url) {
     _customBaseUrl = url.trim();
@@ -88,10 +84,12 @@ class CustomerProfileRepository {
     }
     const envArg = String.fromEnvironment('API_BASE_URL');
     if (envArg.isNotEmpty) return envArg;
-    if (dotenv.isInitialized && dotenv.env['API_BASE_URL'] != null && dotenv.env['API_BASE_URL']!.isNotEmpty) {
+    if (dotenv.isInitialized &&
+        dotenv.env['API_BASE_URL'] != null &&
+        dotenv.env['API_BASE_URL']!.isNotEmpty) {
       return dotenv.env['API_BASE_URL']!;
     }
-    return 'http://10.0.2.2:8000/api/v1';
+    return '';
   }
 
   String get baseUrl => _baseUrl ?? effectiveBaseUrl;
@@ -111,7 +109,7 @@ class CustomerProfileRepository {
     if (cachedJson != null && cachedJson.isNotEmpty) {
       try {
         final decoded = jsonDecode(cachedJson) as Map<String, dynamic>;
-        _cachedProfile = CustomerProfile.fromJson(decoded);
+        _cachedProfiles[uid] = CustomerProfile.fromJson(decoded);
       } catch (e) {
         debugPrint('Error decoding local profile: $e');
       }
@@ -122,18 +120,29 @@ class CustomerProfileRepository {
       final value = await _request('GET');
       if (value != null && value is Map<String, dynamic>) {
         final remote = CustomerProfile.fromJson(value);
-        _cachedProfile = remote;
-        await prefs.setString('$_prefProfilePrefix$uid', jsonEncode(remote.toJson()));
+        _cachedProfiles[uid] = remote;
+        await prefs.setString(
+          '$_prefProfilePrefix$uid',
+          jsonEncode(remote.toJson()),
+        );
         await prefs.setBool('$_prefOnboardingPrefix$uid', true);
         return remote;
       }
+      if (value == null) {
+        _cachedProfiles.remove(uid);
+        await prefs.remove('$_prefProfilePrefix$uid');
+        await prefs.setBool('$_prefOnboardingPrefix$uid', false);
+        return null;
+      }
     } catch (e) {
-      debugPrint('Backend profile fetch note (falling back to local cache): $e');
+      debugPrint(
+        'Backend profile fetch note (falling back to local cache): $e',
+      );
     }
 
     // 3. If onboarding was completed locally, return the cached profile
-    if (isDone && _cachedProfile != null) {
-      return _cachedProfile;
+    if (isDone && _cachedProfiles[uid] != null) {
+      return _cachedProfiles[uid];
     }
 
     // 4. If onboarding was never completed for this user, return null so onboarding screen opens!
@@ -142,77 +151,90 @@ class CustomerProfileRepository {
 
   /// Saves user's onboarding profile persistently in local SharedPreferences
   /// and attempts to sync to the backend API.
-  Future<CustomerProfile> save(Map<String, Object?> values, {String? userUid}) async {
+  Future<CustomerProfile> save(
+    Map<String, Object?> values, {
+    String? userUid,
+  }) async {
     final user = FirebaseAuth.instance.currentUser;
-    final uid = userUid ?? user?.uid ?? 'profile-${DateTime.now().millisecondsSinceEpoch}';
+    final uid =
+        userUid ??
+        user?.uid ??
+        'profile-${DateTime.now().millisecondsSinceEpoch}';
 
-    final profile = CustomerProfile(
-      id: uid,
-      customerType: (values['customer_type'] as String?) ?? 'end_user',
-      name: (values['name'] as String?) ?? user?.displayName ?? 'Customer',
-      mobileNumber: (values['mobile_number'] as String?) ?? '',
-      email: (values['email'] as String?) ?? user?.email ?? '',
-      location: (values['location'] as String?) ?? '',
-      companyName: values['company_name'] as String?,
-      gstNumber: values['gst_number'] as String?,
-    );
+    // The backend is authoritative: never tell a new customer their profile was
+    // saved if the API rejected it or could not persist it.
+    final value = await _request('PUT', body: values);
+    if (value is! Map<String, dynamic>) {
+      throw const HttpException(
+        'The customer platform returned an invalid profile response.',
+      );
+    }
+    final savedProfile = CustomerProfile.fromJson(value);
+    _cachedProfiles[uid] = savedProfile;
 
-    _cachedProfile = profile;
-
-    // Save to SharedPreferences immediately (persistent across app restarts)
+    // Cache only after the backend confirms the save.
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('$_prefProfilePrefix$uid', jsonEncode(profile.toJson()));
+      await prefs.setString(
+        '$_prefProfilePrefix$uid',
+        jsonEncode(savedProfile.toJson()),
+      );
       await prefs.setBool('$_prefOnboardingPrefix$uid', true);
     } catch (e) {
       debugPrint('Error writing to SharedPreferences: $e');
     }
-
-    // Non-blocking sync to backend API if available
-    try {
-      await _request('PUT', body: values);
-    } catch (e) {
-      debugPrint('CustomerProfileRepository.save network sync note (persisted locally): $e');
-    }
-
-    return profile;
+    return savedProfile;
   }
 
   /// Clears local profile cache on sign out
   static void clearCache() {
-    _cachedProfile = null;
-    _offlineBypass = false;
+    _cachedProfiles.clear();
   }
 
   Future<dynamic> _request(String method, {Map<String, Object?>? body}) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) throw const HttpException('Sign in to access your customer profile.');
+    if (user == null)
+      throw const HttpException('Sign in to access your customer profile.');
     final base = Uri.tryParse(baseUrl);
     if (base == null || !base.hasScheme || !base.hasAuthority) {
       throw const HttpException('The customer platform API is not configured.');
     }
-    final root = base.path.endsWith('/') ? base : base.replace(path: '${base.path}/');
+    final root = base.path.endsWith('/')
+        ? base
+        : base.replace(path: '${base.path}/');
     final uri = root.resolve('customers/me');
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
     try {
-      final request = await (method == 'PUT' ? client.putUrl(uri) : client.getUrl(uri)).timeout(const Duration(seconds: 4));
+      final request =
+          await (method == 'PUT' ? client.putUrl(uri) : client.getUrl(uri))
+              .timeout(const Duration(seconds: 4));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      try {
-        final token = await user.getIdToken();
-        if (token != null) {
-          request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-        }
-      } catch (_) {}
+      final token = await user.getIdToken();
+      if (token == null || token.isEmpty) {
+        throw const HttpException(
+          'Your sign-in session could not be verified. Sign in again.',
+        );
+      }
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
       if (body != null) {
         request.headers.contentType = ContentType.json;
         request.write(jsonEncode(body));
       }
-      final response = await request.close().timeout(const Duration(seconds: 4));
-      final text = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 4));
+      final response = await request.close().timeout(
+        const Duration(seconds: 4),
+      );
+      final text = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 4));
       final decoded = text.isEmpty ? null : jsonDecode(text);
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        final message = decoded is Map<String, dynamic> ? decoded['detail'] as String? : null;
-        throw HttpException(message ?? 'Profile error (${response.statusCode}).');
+        final message = decoded is Map<String, dynamic>
+            ? decoded['detail'] as String?
+            : null;
+        throw HttpException(
+          message ?? 'Profile error (${response.statusCode}).',
+        );
       }
       return decoded;
     } finally {

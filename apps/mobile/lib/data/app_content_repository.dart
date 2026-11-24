@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class AppContentRepository {
-  AppContentRepository({String? baseUrl}) : _baseUrl = baseUrl ?? (const String.fromEnvironment('API_BASE_URL').isNotEmpty ? const String.fromEnvironment('API_BASE_URL') : ((dotenv.isInitialized ? dotenv.env['API_BASE_URL'] : null) ?? 'http://10.0.2.2:8000/api/v1'));
+  AppContentRepository({String? baseUrl}) : _baseUrl = baseUrl ?? (const String.fromEnvironment('API_BASE_URL').isNotEmpty ? const String.fromEnvironment('API_BASE_URL') : (dotenv.isInitialized ? (dotenv.env['API_BASE_URL'] ?? '') : ''));
   final String _baseUrl;
 
   Future<List<Map<String, dynamic>>> loadPublishedKnowledge() async {

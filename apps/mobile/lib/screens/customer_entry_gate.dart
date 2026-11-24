@@ -8,6 +8,7 @@ import 'package:material_ui/material_ui.dart';
 import '../data/customer_auth_service.dart';
 import '../data/customer_profile_repository.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_components.dart';
 import 'app_shell.dart';
 
 class CustomerEntryGate extends StatefulWidget {
@@ -19,21 +20,44 @@ class CustomerEntryGate extends StatefulWidget {
 
 class _CustomerEntryGateState extends State<CustomerEntryGate> {
   final _profiles = CustomerProfileRepository();
+  String? _verificationDispatchError;
 
   @override
   Widget build(BuildContext context) {
-    if (Firebase.apps.isEmpty) return const AppShell();
+    final apiUrl = Uri.tryParse(CustomerProfileRepository.effectiveBaseUrl);
+    if (Firebase.apps.isEmpty ||
+        apiUrl == null ||
+        !apiUrl.hasScheme ||
+        !apiUrl.hasAuthority) {
+      return const _AppConfigurationPage();
+    }
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.userChanges(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
           return const _LoadingPage();
         }
         final user = snapshot.data;
-        if (user == null) return const _CustomerAuthPage();
+        if (user == null)
+          return _CustomerAuthPage(
+            onVerificationDispatchError: (message) =>
+                setState(() => _verificationDispatchError = message),
+          );
+        if (!user.emailVerified) {
+          return _EmailVerificationPage(
+            user: user,
+            initialError: _verificationDispatchError,
+            onEmailSent: () =>
+                setState(() => _verificationDispatchError = null),
+            onVerified: () => setState(() {
+              _verificationDispatchError = null;
+            }),
+          );
+        }
 
         return FutureBuilder<CustomerProfile?>(
-          key: ValueKey('${user.uid}_${CustomerProfileRepository.isOfflineBypass}'),
+          key: ValueKey(user.uid),
           future: _profiles.loadMine(userUid: user.uid),
           builder: (context, profileSnapshot) {
             if (profileSnapshot.connectionState != ConnectionState.done) {
@@ -42,7 +66,7 @@ class _CustomerEntryGateState extends State<CustomerEntryGate> {
 
             final profile = profileSnapshot.data;
             // When user has not completed onboarding, ALWAYS show role selection!
-            if (profile == null && !CustomerProfileRepository.isOfflineBypass) {
+            if (profile == null) {
               return _CustomerOnboardingPage(
                 user: user,
                 onSaved: () => setState(() {}),
@@ -58,7 +82,8 @@ class _CustomerEntryGateState extends State<CustomerEntryGate> {
 }
 
 class _CustomerAuthPage extends StatefulWidget {
-  const _CustomerAuthPage();
+  const _CustomerAuthPage({required this.onVerificationDispatchError});
+  final ValueChanged<String?> onVerificationDispatchError;
 
   @override
   State<_CustomerAuthPage> createState() => _CustomerAuthPageState();
@@ -67,19 +92,21 @@ class _CustomerAuthPage extends StatefulWidget {
 class _CustomerAuthPageState extends State<_CustomerAuthPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _passwordFocus = FocusNode();
   final _auth = CustomerAuthService();
   bool _creating = false;
   bool _busy = false;
   String? _error;
   String? _notice;
   bool _showShaNotice = false;
-
-  static const String _debugSha1 = 'AB:EC:76:CC:32:C8:0B:A6:77:B0:AB:C2:FC:04:1F:17:AF:A7:F5:85';
+  bool _passwordVisible = false;
+  bool _resetBusy = false;
 
   @override
   void dispose() {
     _email.dispose();
     _password.dispose();
+    _passwordFocus.dispose();
     super.dispose();
   }
 
@@ -88,7 +115,7 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
     final emailText = _email.text.trim();
     final passwordText = _password.text;
 
-    if (emailText.isEmpty || !emailText.contains('@')) {
+    if (!RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(emailText)) {
       setState(() => _error = 'Enter a valid email address.');
       return;
     }
@@ -110,15 +137,20 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
           email: emailText,
           password: passwordText,
         );
-        // Non-blocking email verification dispatch
         try {
           await result.user?.sendEmailVerification();
-        } catch (_) {}
+          widget.onVerificationDispatchError(null);
+        } catch (_) {
+          widget.onVerificationDispatchError(
+            'Your account was created, but the verification email could not be sent. Tap “Resend verification email” after this screen opens.',
+          );
+        }
       } else {
         await auth.signInWithEmailAndPassword(
           email: emailText,
           password: passwordText,
         );
+        widget.onVerificationDispatchError(null);
       }
     } on FirebaseAuthException catch (error) {
       if (mounted) setState(() => _error = _authMessage(error));
@@ -149,7 +181,8 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
     } on FirebaseAuthException catch (error) {
       if (mounted) {
         final msg = error.message?.toLowerCase() ?? '';
-        final isHashError = error.code == '10' ||
+        final isHashError =
+            error.code == '10' ||
             error.code == 'developer-error' ||
             msg.contains('certificate') ||
             msg.contains('hash') ||
@@ -162,47 +195,17 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
     } catch (e) {
       if (mounted) {
         final errStr = e.toString().toLowerCase();
-        final isHashError = errStr.contains('10') ||
+        final isHashError =
+            errStr.contains('10') ||
             errStr.contains('certificate') ||
             errStr.contains('hash') ||
             errStr.contains('sign_in_failed');
         setState(() {
           _error = isHashError
               ? 'Google Sign-In needs this app’s SHA-1 certificate fingerprint registered in Firebase Console.'
-              : 'Google sign-in could not be completed ($e). Please use Email or Demo Sign-In below.';
+              : 'Google sign-in could not be completed ($e). Please use email and password instead.';
           _showShaNotice = isHashError;
         });
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _quickDemoAuth() async {
-    setState(() {
-      _busy = true;
-      _error = null;
-      _notice = null;
-      _showShaNotice = false;
-    });
-    try {
-      final auth = FirebaseAuth.instance;
-      const demoEmail = 'demo.customer@enertechups.com';
-      const demoPassword = 'DemoCustomer2026!';
-      try {
-        await auth.signInWithEmailAndPassword(email: demoEmail, password: demoPassword);
-      } on FirebaseAuthException catch (e) {
-        if (e.code == 'user-not-found' || e.code == 'invalid-credential') {
-          await auth.createUserWithEmailAndPassword(email: demoEmail, password: demoPassword);
-        } else {
-          rethrow;
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        // Fallback: continue in offline bypass mode
-        CustomerProfileRepository.setOfflineBypass(true);
-        setState(() {});
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -214,6 +217,11 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
       setState(() => _error = 'Enter your email address first.');
       return;
     }
+    setState(() {
+      _resetBusy = true;
+      _error = null;
+      _notice = null;
+    });
     try {
       await FirebaseAuth.instance.sendPasswordResetEmail(
         email: _email.text.trim(),
@@ -226,17 +234,14 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
       }
     } on FirebaseAuthException catch (error) {
       if (mounted) setState(() => _error = _authMessage(error));
+    } catch (_) {
+      if (mounted)
+        setState(
+          () => _error = 'Could not send a password reset email. Check your connection and try again.',
+        );
+    } finally {
+      if (mounted) setState(() => _resetBusy = false);
     }
-  }
-
-  void _copySha1() {
-    Clipboard.setData(const ClipboardData(text: _debugSha1));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('SHA-1 fingerprint copied to clipboard! Paste it in Firebase Console -> Project Settings -> General -> Your Android App.'),
-        duration: Duration(seconds: 4),
-      ),
-    );
   }
 
   @override
@@ -276,68 +281,10 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                   label: const Text('Continue with Google'),
                 ),
 
-                // SHA-1 Notice if certificate check failed
                 if (_showShaNotice) ...[
                   const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF7ED),
-                      border: Border.all(color: const Color(0xFFFDBA74)),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Row(
-                          children: [
-                            Icon(Icons.info_outline, color: Color(0xFFC2410C), size: 18),
-                            SizedBox(width: 6),
-                            Text(
-                              'Firebase SHA-1 Setup Required',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF9A3412),
-                                fontSize: 13,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        const Text(
-                          'Google Sign-In requires this SHA-1 fingerprint in Firebase Console under your Android App:',
-                          style: TextStyle(fontSize: 12, color: Color(0xFF7C2D12)),
-                        ),
-                        const SizedBox(height: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: const Color(0xFFFED7AA)),
-                          ),
-                          child: const SelectableText(
-                            _debugSha1,
-                            style: TextStyle(fontFamily: 'monospace', fontSize: 11, fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            TextButton.icon(
-                              onPressed: _copySha1,
-                              icon: const Icon(Icons.copy_rounded, size: 14),
-                              label: const Text('Copy SHA-1', style: TextStyle(fontSize: 12)),
-                            ),
-                            const Spacer(),
-                            TextButton(
-                              onPressed: () => setState(() => _showShaNotice = false),
-                              child: const Text('Dismiss', style: TextStyle(fontSize: 12)),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+                  const NoticeCard(
+                    message: 'Google Sign-In needs a SHA-1 fingerprint for this build registered in Firebase. Ask the release administrator to add the matching signing certificate in Firebase Console.',
                   ),
                 ],
 
@@ -350,7 +297,10 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                         padding: EdgeInsets.symmetric(horizontal: 12),
                         child: Text(
                           'OR',
-                          style: TextStyle(fontSize: 11, color: AppColors.muted),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.muted,
+                          ),
                         ),
                       ),
                       Expanded(child: Divider()),
@@ -359,30 +309,65 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                 ),
 
                 // Email & Password
-                TextField(
-                  controller: _email,
-                  keyboardType: TextInputType.emailAddress,
-                  autofillHints: const [AutofillHints.email],
-                  decoration: const InputDecoration(
-                    labelText: 'Email address',
-                    prefixIcon: Icon(Icons.mail_outline_rounded),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _password,
-                  obscureText: true,
-                  autofillHints: [
-                    _creating ? AutofillHints.newPassword : AutofillHints.password,
-                  ],
-                  decoration: const InputDecoration(
-                    labelText: 'Password',
-                    prefixIcon: Icon(Icons.lock_outline_rounded),
+                AutofillGroup(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextField(
+                        controller: _email,
+                        keyboardType: TextInputType.emailAddress,
+                        textCapitalization: TextCapitalization.none,
+                        textInputAction: TextInputAction.next,
+                        autocorrect: false,
+                        autofillHints: const [AutofillHints.email],
+                        onSubmitted: (_) =>
+                            FocusScope.of(context).requestFocus(_passwordFocus),
+                        decoration: const InputDecoration(
+                          labelText: 'Email address',
+                          prefixIcon: Icon(Icons.mail_outline_rounded),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _password,
+                        focusNode: _passwordFocus,
+                        obscureText: !_passwordVisible,
+                        textInputAction: TextInputAction.done,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        autofillHints: [
+                          _creating
+                              ? AutofillHints.newPassword
+                              : AutofillHints.password,
+                        ],
+                        onSubmitted: (_) {
+                          if (!_busy) _emailAuth();
+                        },
+                        decoration: InputDecoration(
+                          labelText: 'Password',
+                          prefixIcon: const Icon(Icons.lock_outline_rounded),
+                          suffixIcon: IconButton(
+                            tooltip: _passwordVisible
+                                ? 'Hide password'
+                                : 'Show password',
+                            onPressed: () => setState(
+                              () => _passwordVisible = !_passwordVisible,
+                            ),
+                            icon: Icon(
+                              _passwordVisible
+                                  ? Icons.visibility_off_outlined
+                                  : Icons.visibility_outlined,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
 
                 if (_error != null) _InlineMessage(text: _error!, error: true),
-                if (_notice != null) _InlineMessage(text: _notice!, error: false),
+                if (_notice != null)
+                  _InlineMessage(text: _notice!, error: false),
 
                 const SizedBox(height: 16),
                 FilledButton(
@@ -391,7 +376,10 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                       ? const SizedBox(
                           width: 20,
                           height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
                         )
                       : Text(_creating ? 'Create account' : 'Sign in'),
                 ),
@@ -400,8 +388,14 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
-                      onPressed: _busy ? null : _resetPassword,
-                      child: const Text('Forgot password?'),
+                      onPressed: _busy || _resetBusy ? null : _resetPassword,
+                      child: _resetBusy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Forgot password?'),
                     ),
                   ),
 
@@ -410,6 +404,7 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                       ? null
                       : () => setState(() {
                           _creating = !_creating;
+                          _passwordVisible = false;
                           _error = null;
                           _notice = null;
                           _showShaNotice = false;
@@ -419,17 +414,6 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                         ? 'Already have an account?  Sign in'
                         : 'New to EnerTech?  Create an account',
                   ),
-                ),
-
-                const SizedBox(height: 10),
-                const Divider(),
-                const SizedBox(height: 6),
-
-                // Quick Demo Sign In
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _quickDemoAuth,
-                  icon: const Icon(Icons.explore_outlined, size: 20),
-                  label: const Text('Quick Demo Login / Test App'),
                 ),
               ],
             ),
@@ -446,7 +430,226 @@ class _CustomerOnboardingPage extends StatefulWidget {
   final VoidCallback onSaved;
 
   @override
-  State<_CustomerOnboardingPage> createState() => _CustomerOnboardingPageState();
+  State<_CustomerOnboardingPage> createState() =>
+      _CustomerOnboardingPageState();
+}
+
+class _EmailVerificationPage extends StatefulWidget {
+  const _EmailVerificationPage({
+    required this.user,
+    required this.onVerified,
+    required this.onEmailSent,
+    this.initialError,
+  });
+  final User user;
+  final VoidCallback onVerified;
+  final VoidCallback onEmailSent;
+  final String? initialError;
+
+  @override
+  State<_EmailVerificationPage> createState() => _EmailVerificationPageState();
+}
+
+class _EmailVerificationPageState extends State<_EmailVerificationPage> {
+  bool _busy = false;
+  String? _error;
+  String? _notice;
+
+  @override
+  void initState() {
+    super.initState();
+    _error = widget.initialError;
+  }
+
+  Future<void> _resend() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      await widget.user.sendEmailVerification();
+      widget.onEmailSent();
+      if (mounted)
+        setState(
+          () => _notice =
+              'Verification email sent. Check your inbox and spam folder.',
+        );
+    } on FirebaseAuthException catch (error) {
+      if (mounted) setState(() => _error = _authMessage(error));
+    } catch (_) {
+      if (mounted)
+        setState(
+          () => _error = 'Could not send the verification email. Check your connection and try again.',
+        );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _checkVerification() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      await widget.user.reload();
+      final current = FirebaseAuth.instance.currentUser;
+      if (current?.emailVerified == true) {
+        widget.onVerified();
+      } else if (mounted) {
+        setState(
+          () => _notice = 'This email is not verified yet. Open the verification link, then try again.',
+        );
+      }
+    } on FirebaseAuthException catch (error) {
+      if (mounted) setState(() => _error = _authMessage(error));
+    } catch (_) {
+      if (mounted)
+        setState(
+          () => _error = 'Could not check verification status. Try again.',
+        );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: SafeArea(
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(22),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const _BrandMark(),
+                const SizedBox(height: 24),
+                const Text(
+                  'Verify your email',
+                  style: TextStyle(
+                    fontSize: 25,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.ink,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Verify your account before setting up a customer or business profile. This keeps quote and service updates linked to the right account.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.45,
+                    color: AppColors.muted,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Account email',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.muted,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        SelectableText(
+                          widget.user.email ?? '',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.ink,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (_error != null) _InlineMessage(text: _error!, error: true),
+                if (_notice != null)
+                  _InlineMessage(text: _notice!, error: false),
+                const SizedBox(height: 16),
+                FilledButton(
+                  onPressed: _busy ? null : _checkVerification,
+                  child: _busy
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('I have verified my email'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton(
+                  onPressed: _busy ? null : _resend,
+                  child: const Text('Resend verification email'),
+                ),
+                TextButton(
+                  onPressed: _busy
+                      ? null
+                      : () => FirebaseAuth.instance.signOut(),
+                  child: const Text('Sign out'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _AppConfigurationPage extends StatelessWidget {
+  const _AppConfigurationPage();
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: SafeArea(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: const Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const _BrandMark(),
+                const SizedBox(height: 22),
+                const Text(
+                  'App setup is incomplete',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 23,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.ink,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Customer sign-in and app data are unavailable until Firebase and the HTTPS API endpoint are configured for this app build.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.45,
+                    color: AppColors.muted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
@@ -494,10 +697,12 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
     if (!_isBusiness) return null;
     final clean = value?.trim().toUpperCase() ?? '';
     if (clean.isEmpty) return 'Enter your business GST number.';
-    if (clean.length < 10) return 'GST number must be at least 10 characters.';
+    if (clean.length != 15) return 'Enter the 15-character GSTIN.';
     // Standard Indian GSTIN pattern: 2 digits + 10 alphanumeric PAN + 1 digit/letter + Z + 1 check digit
-    final gstRegex = RegExp(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$');
-    if (clean.length == 15 && !gstRegex.hasMatch(clean)) {
+    final gstRegex = RegExp(
+      r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$',
+    );
+    if (!gstRegex.hasMatch(clean)) {
       return 'Enter a valid 15-character GSTIN format (e.g. 27AAAAA0000A1Z5).';
     }
     return null;
@@ -510,24 +715,23 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
       _error = null;
     });
     try {
-      await _profiles.save(
-        {
-          'customer_type': _type,
-          'name': _name.text.trim(),
-          'mobile_number': _mobile.text.trim(),
-          'email': widget.user.email?.trim().toLowerCase() ?? '',
-          'location': _location.text.trim(),
-          'company_name': _isBusiness ? _company.text.trim() : null,
-          'gst_number': _isBusiness ? _gst.text.trim().toUpperCase() : null,
-        },
-        userUid: widget.user.uid,
-      );
+      await _profiles.save({
+        'customer_type': _type,
+        'name': _name.text.trim(),
+        'mobile_number': _mobile.text.trim(),
+        'email': widget.user.email?.trim().toLowerCase() ?? '',
+        'location': _location.text.trim(),
+        'company_name': _isBusiness ? _company.text.trim() : null,
+        'gst_number': _isBusiness ? _gst.text.trim().toUpperCase() : null,
+      }, userUid: widget.user.uid);
       widget.onSaved();
     } on HttpException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } catch (_) {
-      // Local save is already complete inside _profiles.save()
-      widget.onSaved();
+      if (mounted)
+        setState(
+          () => _error = 'Your profile could not be saved. Check your connection and try again.',
+        );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -558,7 +762,7 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
                   ),
                   const SizedBox(height: 6),
                   const Text(
-                    'Choose your account type so we can display relevant pricing, specifications, and dedicated support for your requirements.',
+                    'Choose the account type that best describes you. This helps our team route your product, quote, and support requests.',
                     style: TextStyle(color: AppColors.muted, fontSize: 13),
                   ),
                   const SizedBox(height: 20),
@@ -610,22 +814,12 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
 
                   const SizedBox(height: 18),
 
-                  // Company name (REQUIRED for Reseller, EPC, Distributor)
-                  if (_isBusiness) ...[
-                    _ProfileField(
-                      controller: _company,
-                      label: 'Company / Business Name *',
-                      icon: Icons.business_rounded,
-                      validator: (v) => _required(v, 'company / business name'),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-
                   // Full name (REQUIRED for all)
                   _ProfileField(
                     controller: _name,
                     label: 'Full Name *',
                     icon: Icons.person_outline_rounded,
+                    textCapitalization: TextCapitalization.words,
                     validator: (v) => _required(v, 'full name'),
                   ),
                   const SizedBox(height: 12),
@@ -637,11 +831,20 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
                     icon: Icons.phone_outlined,
                     keyboard: TextInputType.phone,
                     validator: (v) {
-                      final error = _required(v, 'mobile number', minLength: 10);
+                      final error = _required(
+                        v,
+                        'mobile number',
+                        minLength: 10,
+                      );
                       if (error != null) return error;
-                      return RegExp(r'^[+0-9()\-\s]+$').hasMatch(v!.trim())
-                          ? null
-                          : 'Use digits and an optional country code.';
+                      final clean = v!.trim();
+                      final digits = clean.replaceAll(RegExp(r'[^0-9]'), '');
+                      if (!RegExp(r'^\+?[0-9()\-\s]+$').hasMatch(clean) ||
+                          digits.length < 10 ||
+                          digits.length > 15) {
+                        return 'Enter 10–15 digits, with an optional country code.';
+                      }
+                      return null;
                     },
                   ),
                   const SizedBox(height: 12),
@@ -651,8 +854,9 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
                     initialValue: widget.user.email ?? '',
                     readOnly: true,
                     decoration: const InputDecoration(
-                      labelText: 'Account Email',
+                      labelText: 'Verified account email',
                       prefixIcon: Icon(Icons.email_outlined),
+                      helperText: 'This email is linked to your sign-in and cannot be changed here.',
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -662,8 +866,20 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
                     controller: _location,
                     label: 'Location (City, State) *',
                     icon: Icons.location_on_outlined,
+                    textCapitalization: TextCapitalization.words,
                     validator: (v) => _required(v, 'location (city, state)'),
                   ),
+
+                  if (_isBusiness) ...[
+                    const SizedBox(height: 12),
+                    _ProfileField(
+                      controller: _company,
+                      label: 'Company / Business Name *',
+                      icon: Icons.business_rounded,
+                      textCapitalization: TextCapitalization.words,
+                      validator: (v) => _required(v, 'company / business name'),
+                    ),
+                  ],
 
                   // GST Number (REQUIRED for Reseller, EPC, Distributor)
                   if (_isBusiness) ...[
@@ -673,11 +889,19 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
                       label: 'GSTIN / GST Number *',
                       icon: Icons.receipt_long_outlined,
                       textCapitalization: TextCapitalization.characters,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'[0-9A-Za-z]'),
+                        ),
+                        LengthLimitingTextInputFormatter(15),
+                      ],
+                      textInputAction: TextInputAction.done,
                       validator: _validateGst,
                     ),
                   ],
 
-                  if (_error != null) _InlineMessage(text: _error!, error: true),
+                  if (_error != null)
+                    _InlineMessage(text: _error!, error: true),
 
                   const SizedBox(height: 20),
                   FilledButton(
@@ -686,13 +910,18 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
                           )
                         : const Text('Save and Continue'),
                   ),
                   const SizedBox(height: 6),
                   TextButton(
-                    onPressed: _busy ? null : () => FirebaseAuth.instance.signOut(),
+                    onPressed: _busy
+                        ? null
+                        : () => FirebaseAuth.instance.signOut(),
                     child: const Text('Sign out'),
                   ),
                 ],
@@ -712,6 +941,8 @@ class _ProfileField extends StatelessWidget {
     required this.icon,
     this.keyboard,
     this.textCapitalization = TextCapitalization.none,
+    this.inputFormatters,
+    this.textInputAction = TextInputAction.next,
     this.validator,
   });
   final TextEditingController controller;
@@ -719,6 +950,8 @@ class _ProfileField extends StatelessWidget {
   final IconData icon;
   final TextInputType? keyboard;
   final TextCapitalization textCapitalization;
+  final List<TextInputFormatter>? inputFormatters;
+  final TextInputAction textInputAction;
   final String? Function(String?)? validator;
 
   @override
@@ -726,6 +959,8 @@ class _ProfileField extends StatelessWidget {
     controller: controller,
     keyboardType: keyboard,
     textCapitalization: textCapitalization,
+    inputFormatters: inputFormatters,
+    textInputAction: textInputAction,
     validator: validator,
     decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon)),
   );
@@ -747,37 +982,49 @@ class _RoleChoice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final active = selected == value;
-    return InkWell(
-      onTap: () => onTap(value),
+    final shape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: active ? const Color(0xFFEAF3FA) : Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: active ? AppColors.blue : AppColors.border,
-            width: active ? 2 : 1,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 18,
-              color: active ? AppColors.blue : AppColors.muted,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: TextStyle(
-                color: active ? AppColors.blue : AppColors.ink,
-                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                fontSize: 13,
+      side: BorderSide(
+        color: active ? AppColors.blue : AppColors.border,
+        width: active ? 2 : 1,
+      ),
+    );
+    return Semantics(
+      button: true,
+      selected: active,
+      label: label,
+      excludeSemantics: true,
+      child: Material(
+        color: active ? const Color(0xFFEAF3FA) : Colors.white,
+        shape: shape,
+        child: InkWell(
+          onTap: () => onTap(value),
+          customBorder: shape,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 48),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    icon,
+                    size: 18,
+                    color: active ? AppColors.blue : AppColors.muted,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: active ? AppColors.blue : AppColors.ink,
+                      fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -852,8 +1099,8 @@ String _authMessage(FirebaseAuthException error) => switch (error.code) {
   'wrong-password' ||
   'user-not-found' => 'Email or password is incorrect.',
   'too-many-requests' => 'Too many attempts. Wait a little, then try again.',
-  'google-not-configured' => 'Google sign-in needs the Firebase OAuth client ID configured.',
-  'popup-closed-by-user' ||
-  'canceled' => 'Sign-in was cancelled.',
+  'google-not-configured' =>
+    'Google sign-in needs the Firebase OAuth client ID configured.',
+  'popup-closed-by-user' || 'canceled' => 'Sign-in was cancelled.',
   _ => error.message ?? 'Authentication could not be completed. Try again.',
 };

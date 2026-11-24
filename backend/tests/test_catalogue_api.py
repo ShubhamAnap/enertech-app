@@ -44,7 +44,7 @@ def test_empty_catalogue_is_a_real_empty_result(client: TestClient) -> None:
     assert client.get("/api/v1/catalogue/categories").json() == []
     response = client.get("/api/v1/catalogue/products")
     assert response.status_code == 200
-    assert response.json() == {"items": [], "total": 0, "limit": 24, "offset": 0}
+    assert response.json() == {"items": [], "total": 0, "limit": 100, "offset": 0}
 
 
 def test_catalogue_hides_unpublished_rows_and_paginates(client: TestClient) -> None:
@@ -71,6 +71,12 @@ def test_catalogue_hides_unpublished_rows_and_paginates(client: TestClient) -> N
     assert client.get("/api/v1/catalogue/categories").json()[0]["slug"] == "verified-test-category"
 
 
-@pytest.mark.parametrize("query", ["limit=0", "limit=101", "offset=-1", "q=" + ("x" * 121)])
+def test_catalogue_accepts_cms_max_page_size(client: TestClient) -> None:
+    response = client.get("/api/v1/catalogue/products?limit=500")
+    assert response.status_code == 200
+    assert response.json()["limit"] == 500
+
+
+@pytest.mark.parametrize("query", ["limit=0", "limit=501", "offset=-1", "q=" + ("x" * 121)])
 def test_invalid_catalogue_parameters_are_rejected(client: TestClient, query: str) -> None:
     assert client.get(f"/api/v1/catalogue/products?{query}").status_code == 422

@@ -46,5 +46,6 @@ class ProductPublic(BaseModel):
 class ProductPage(BaseModel):
     items: list[ProductPublic]
     total: int = Field(ge=0)
-    limit: int = Field(ge=1, le=100)
+    # Both the public catalogue and CMS use bounded pages up to 500 rows.
+    limit: int = Field(ge=1, le=500)
     offset: int = Field(ge=0)
