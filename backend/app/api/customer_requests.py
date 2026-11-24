@@ -303,4 +303,3 @@ def update_contact_inquiry(
         created_at=record.created_at.isoformat(),
         updated_at=record.updated_at.isoformat(),
     )
-
