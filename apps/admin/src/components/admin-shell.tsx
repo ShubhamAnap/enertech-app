@@ -1781,7 +1781,11 @@ export default function AdminShell({ user, role }: { user: User; role: string })
 function Empty({ title, detail }: { title: string; detail: string }) {
   return (
     <div className="p-12 text-center flex flex-col items-center justify-center">
-      <div className="w-12 h-12 rounded-full bg-base-200 flex items-center justify-center text-xl mb-3">📁</div>
+      <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-base-200 text-base-content/45">
+        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+          <path d="M3.5 6.5h6l2 2h9v9.25A1.75 1.75 0 0 1 20.75 19.5h-17A1.75 1.75 0 0 1 2 17.75V8.25A1.75 1.75 0 0 1 3.5 6.5Z" />
+        </svg>
+      </div>
       <h3 className="font-bold text-base text-base-content">{title}</h3>
       <p className="text-xs text-base-content/60 max-w-sm mt-1">{detail}</p>
     </div>
