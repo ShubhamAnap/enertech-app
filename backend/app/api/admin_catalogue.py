@@ -8,11 +8,25 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import AdminIdentity, require_admin_roles
 from app.db.session import get_session
-from app.models import AuditEvent, Product, ProductCategory
+from app.models import AppConfig, AuditEvent, Product, ProductCategory
 from app.schemas.cms import CategoryAdmin, CategoryPatch, CategoryWrite, ProductAdmin, ProductAdminPage, ProductPatch, ProductWrite
 
 router = APIRouter(prefix="/admin/catalogue", tags=["admin catalogue"])
 CONTENT_ROLES = ("content_editor", "admin", "super_admin")
+
+
+def _is_featured_in_home(session: Session, field: str, item_id: UUID) -> bool:
+    home = session.scalar(select(AppConfig).where(AppConfig.key == "home"))
+    if home is None:
+        return False
+    item_id_text = str(item_id)
+    for payload in (home.draft_payload, home.published_payload):
+        if payload is None:
+            continue
+        selected = payload.get(field)
+        if isinstance(selected, list) and item_id_text in {str(value) for value in selected}:
+            return True
+    return False
 
 
 def _audit(session: Session, admin: AdminIdentity, action: str, entity_type: str, entity_id: str, fields: list[str]) -> None:
@@ -232,6 +246,8 @@ def publish_category(
     category = session.get(ProductCategory, category_id)
     if category is None:
         raise HTTPException(status_code=404, detail="Category not found")
+    if category.wordpress_source_id is not None:
+        raise HTTPException(status_code=409, detail="This category is managed by WooCommerce; change it there and sync again")
     values = CategoryWrite.model_validate(_category_payload(category)).model_dump(mode="json")
     category.slug = values["slug"]
     category.name = values["name"]
@@ -360,6 +376,8 @@ def publish_product(
     product = session.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
+    if product.wordpress_source_id is not None:
+        raise HTTPException(status_code=409, detail="This product is managed by WooCommerce; change it there and sync again")
     values = ProductWrite.model_validate(_product_payload(product)).model_dump(mode="json")
     if not values.get("source_reference"):
         raise HTTPException(status_code=422, detail="Add a verified source reference before publishing this product")
@@ -428,9 +446,17 @@ def delete_product(
     product = session.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
+    if product.wordpress_source_id is not None:
+        raise HTTPException(status_code=409, detail="This product is managed by WooCommerce; remove it there and sync again")
+    if _is_featured_in_home(session, "featured_product_ids", product.id):
+        raise HTTPException(status_code=409, detail="Remove this product from Home featured products before deleting it")
     _audit(session, admin, "product.deleted", "product", str(product.id), ["deleted"])
     session.delete(product)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="This product is referenced by other catalogue content and cannot be deleted") from error
 
 
 @router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -442,7 +468,18 @@ def delete_category(
     category = session.get(ProductCategory, category_id)
     if category is None:
         raise HTTPException(status_code=404, detail="Category not found")
+    if category.wordpress_source_id is not None:
+        raise HTTPException(status_code=409, detail="This category is managed by WooCommerce; remove it there and sync again")
+    product_count = session.scalar(select(func.count()).select_from(Product).where(Product.category_id == category.id)) or 0
+    if product_count:
+        raise HTTPException(status_code=409, detail="Move or delete the products in this collection before deleting it")
+    if _is_featured_in_home(session, "featured_category_ids", category.id):
+        raise HTTPException(status_code=409, detail="Remove this collection from Home featured collections before deleting it")
     _audit(session, admin, "category.deleted", "product_category", str(category.id), ["deleted"])
     session.delete(category)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="This collection is referenced by catalogue content and cannot be deleted") from error
 
