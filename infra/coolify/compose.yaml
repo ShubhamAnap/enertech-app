@@ -13,7 +13,7 @@ services:
       API_CORS_ORIGINS: ${API_CORS_ORIGINS:?set the public CMS origin}
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?set Firebase project ID}
       # Runtime-only secret: do not require or pass it to the image build.
-      FIREBASE_SERVICE_ACCOUNT_JSON: ${FIREBASE_SERVICE_ACCOUNT_JSON:-}
+      FIREBASE_SERVICE_ACCOUNT_JSON: ${FIREBASE_SERVICE_ACCOUNT_JSON:?set Firebase Admin service-account JSON}
       BOOTSTRAP_SUPER_ADMIN_UIDS: ${BOOTSTRAP_SUPER_ADMIN_UIDS:-}
       WORDPRESS_API_BASE_URL: ${WORDPRESS_API_BASE_URL:-}
       WORDPRESS_CONSUMER_KEY: ${WORDPRESS_CONSUMER_KEY:-}
