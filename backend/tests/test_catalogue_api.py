@@ -82,6 +82,24 @@ def test_customer_requests_are_scoped_to_the_verified_identity(client: TestClien
     assert rows[0]["id"] == second.json()["id"]
 
 
+def test_quote_and_service_requests_share_per_account_rate_limit(client: TestClient) -> None:
+    identity = Identity("customer-a", "a@example.test", "Customer A", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: identity
+    quote_body = {"application": "Factory", "equipment_or_load": "Production line"}
+    service_body = {
+        "product_model": "UPS-100", "problem_category": "other",
+        "description": "The unit needs a technical inspection.", "service_location": "Pune",
+    }
+
+    for _ in range(5):
+        assert client.post("/api/v1/requests/quote", json=quote_body).status_code == 201
+        assert client.post("/api/v1/requests/service", json=service_body).status_code == 201
+    assert client.post("/api/v1/requests/quote", json=quote_body).status_code == 429
+
+    identity = Identity("customer-b", "b@example.test", "Customer B", {"email_verified": True})
+    assert client.post("/api/v1/requests/service", json=service_body).status_code == 201
+
+
 def test_contact_inquiry_rate_limit_uses_customer_uid_not_mutable_email(client: TestClient) -> None:
     identity = Identity("customer-a", "a@example.test", "Customer A", {"email_verified": True})
     app.dependency_overrides[get_current_identity] = lambda: identity
