@@ -34,4 +34,5 @@ With no Firebase project, the CMS sign-in page and customer account screen expla
 - Supply an approved EnerTech logo asset/URL. No standalone logo file was present in the supplied workspace.
 - Confirm company service/quote policies, data retention/privacy text, release signing, domain/TLS, and backup/restore ownership before a production launch.
 
-See `docs/STATUS.md` for the shipped scope and what remains. No GitHub push or Coolify deployment has been performed.
+See `docs/STATUS.md` and `docs/MASTER_AUDIT_PLAN.md` for implemented scope and remaining work. The source has been published to GitHub `main`; a live Coolify deployment and production APK still require the external Firebase, Supabase, domain, and signing configuration described in `docs/DEPLOYMENT.md`.
+
