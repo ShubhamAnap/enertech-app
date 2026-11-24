@@ -24,13 +24,21 @@ class _AppShellState extends State<AppShell> {
   late final ProductSelectionStore _productSelection = ProductSelectionStore();
   late final Future<List<ProductCategory>> _categories = _catalogue
       .getCategories();
-  late final Future<ProductPageData> _homepageProducts = _catalogue.getProducts(
-    limit: 300,
-  );
   late final Future<Map<String, dynamic>> _appContent = AppContentRepository()
       .loadPublished();
+  late final Future<ProductPageData> _homepageProducts = _loadHomepageProducts();
   late final Future<List<Map<String, dynamic>>> _knowledge =
       AppContentRepository().loadPublishedKnowledge();
+
+  Future<ProductPageData> _loadHomepageProducts() async {
+    final content = await _appContent;
+    final home = content['home'];
+    final selected = home is Map && home['featured_product_ids'] is List
+        ? (home['featured_product_ids'] as List).map((value) => value.toString()).toList(growable: false)
+        : const <String>[];
+    if (selected.isNotEmpty) return _catalogue.getProductsByIds(selected);
+    return _catalogue.getProducts(limit: 300);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -107,3 +115,4 @@ class _AppShellState extends State<AppShell> {
     );
   }
 }
+
