@@ -168,6 +168,31 @@ class CatalogueRepository {
     throw const CatalogueException('Product could not be loaded from server.');
   }
 
+  Future<ProductPageData> getProductsByIds(List<String> ids) async {
+    final selectedIds = ids.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet().take(12).toList();
+    if (selectedIds.isEmpty) return const ProductPageData(items: [], total: 0);
+    try {
+      final json = await _getJson(
+        '/catalogue/products',
+        queryParameters: {'ids': selectedIds.join(','), 'limit': '${selectedIds.length}'},
+      );
+      if (json is Map<String, dynamic>) return ProductPageData.fromJson(json);
+    } catch (e) {
+      debugPrint('CatalogueRepository.getProductsByIds network note: $e');
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_productsCacheKey);
+      if (raw != null && raw.isNotEmpty) {
+        final cached = ProductPageData.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final selected = cached.items.where((product) => selectedIds.contains(product.id)).toList(growable: false);
+        return ProductPageData(items: selected, total: selected.length);
+      }
+    } catch (_) {}
+    return const ProductPageData(items: [], total: 0);
+  }
+
   Future<dynamic> _getJson(
     String path, {
     Map<String, String>? queryParameters,
@@ -208,3 +233,4 @@ class CatalogueRepository {
     }
   }
 }
+
