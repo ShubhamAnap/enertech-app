@@ -15,7 +15,7 @@ Updated 2026-11-24. The project contains the customer app, CMS, API, and Coolify
 ## Verification completed
 
 - Alembic upgraded the local PostgreSQL schema to `e21a7c0d9f43`.
-- Backend: 15 pytest checks pass, including bootstrap-admin revocation, database-error redaction, async upload/size checks, request ownership, authorization, and state-transition checks; Python compilation passes.
+- Backend: 16 pytest checks pass, including bootstrap-admin revocation, database-error redaction, async upload/size checks, request ownership, authorization, rate limiting by stable Firebase UID, and state-transition checks; Python compilation passes. Alembic offline SQL compiles through `a91d4c62e810`.
 - CMS: ESLint reports zero errors or warnings; TypeScript `--noEmit` and a Next.js production-mode build pass with test values.
 - Mobile: Flutter analysis reports no issues and all 6 widget/unit tests pass.
 - No live-configured CMS image or production APK was produced because the deployment Firebase/API values and production signing key are not configured.
