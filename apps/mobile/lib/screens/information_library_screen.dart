@@ -132,10 +132,8 @@ class _InformationLibraryScreenState extends State<InformationLibraryScreen> {
                     )
                     .toList(growable: false);
                 if (rows.isEmpty) {
-                  final message =
-                      widget.title.toLowerCase().contains('warranty')
-                      ? 'No published warranty or AMC documents are available. Coverage status is not inferred from product manuals.'
-                      : 'Published product manuals and documents will appear here when available.';
+                  const message =
+                      'Published product manuals and documents will appear here when available.';
                   return ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.all(20),
@@ -215,3 +213,4 @@ class _LibraryDocument {
   final ProductSummary product;
   final ProductDocument document;
 }
+
