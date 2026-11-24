@@ -23,6 +23,7 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 - [x] Treat bootstrap-super-admin UIDs as initial access only; once an admin record exists, stored roles and deactivation control access.
 - [x] Keep the CMS container port internal so public requests enter through Coolify's HTTPS proxy instead of bypassing it on port 3000.
 - [x] Validate featured collection/product references when publishing Home content.
+- [x] Keep featured-product publishing consistent across catalogue pagination: limit CMS selections to the API's 12-item schema and let the app fetch selected, published IDs directly, even when those products fall beyond the first catalogue page.
 - [x] Remove the fixed demo customer credentials and offline-auth bypass from the app entry screen.
 - [x] Remove the duplicate account-tab sign-in/sign-up form so all customer authentication goes through the verified-email entry flow.
 - [x] Remove embedded Firebase defaults from app and CMS clients and remove the app's emulator API fallback; missing configuration now blocks account access instead of silently using fallback settings.
@@ -145,7 +146,7 @@ The supplied CMS specification also calls for enquiry/quote/service queues, assi
 
 CMS app-content parity checked from source:
 
-- Home search prompt, intent-card copy, hero copy/CTA, announcement fields, section visibility/order, featured products, and featured collections are consumed.
+- Home search prompt, intent-card copy, hero copy/CTA, announcement fields, section visibility/order, featured products, and featured collections are consumed. The CMS limits featured selectors to the 12 IDs accepted by the API; the app resolves selected product IDs directly instead of relying on its first 300 catalogue rows.
 - Contact phone, WhatsApp, emails, address, support hours, and availability text are consumed by the support/contact screens.
 - Solution Finder options, step titles, and both helper prompts are consumed.
 - Brand display name and logo are consumed; `support_icon_url` is now displayed in the support header.
@@ -156,5 +157,5 @@ CMS app-content parity checked from source:
 
 - This document records source-level findings. No live service behavior can be confirmed without the external project credentials and source mappings.
 - Visual/device QA remains open. The UI/UX Pro Max search returned guidance for visible labels, correct input types, password-manager support, and confirmation feedback; small-screen, landscape, dynamic-text, contrast, touch-target, and keyboard-focus checks still need rendered device/browser review.
-- Local checks: CMS ESLint reports zero errors or warnings; TypeScript `--noEmit` and a Next.js production-mode build passed with test values, including earlier explicit checks for the `sslip.io` test exception and rejection of arbitrary HTTP domains; all 17 backend tests passed, including bootstrap-admin revocation, database-error redaction, async media upload/size enforcement, owner scoping, editor authorization, request-transition checks, contact UID rate limiting, and shared quote/service request rate limiting; Python compilation passed, and Alembic offline SQL generation compiled through `c42e17b3d906`; Flutter `analyze` and all six app tests passed, including product comparison rendering/removal, selection limits, and cached category-slug filtering. The Android release guard stops until a production HTTPS API and release signing key are configured. No emulator/device is available, so installed-device visual verification remains open. No live database migration or staging deployment was run.
+- Local checks: CMS ESLint, TypeScript `--noEmit`, and production build pass with test values, including earlier explicit checks for the `sslip.io` test exception and rejection of arbitrary HTTP domains. All 19 backend tests pass, including database-error redaction, media upload limits, authorization, request ownership/transitions, both rate limits, and selected-product ID filtering across pages. Python compilation passes, and Alembic offline SQL compiles through `c42e17b3d906`. The six Flutter tests and analyzer passed before the latest selected-product lookup change; Flutter is unavailable in the current shell, so those app checks could not be rerun afterward. No emulator/device is available, so installed-device visual verification remains open. The Android release guard stops until a production HTTPS API and release signing key are configured. No live database migration or staging deployment was run.
 
