@@ -29,4 +29,3 @@ def get_session() -> Generator[Session, None, None]:
     except Exception as error:
         logger.error("Database session exception: %s", error)
         raise
-
