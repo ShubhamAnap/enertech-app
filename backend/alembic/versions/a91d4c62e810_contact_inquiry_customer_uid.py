@@ -37,4 +37,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_contact_inquiries_customer_uid", table_name="contact_inquiries")
     op.drop_column("contact_inquiries", "customer_uid")
-
