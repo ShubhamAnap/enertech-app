@@ -34,7 +34,7 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 - [x] Make product stock status honest when the source has not provided availability; both CMS views distinguish unknown, out-of-stock, in-stock, and backorder.
 - [x] Remove an invented 22% MRP calculation and a static "Default Sales Channel" label from product listings; show source, published price, and reported stock instead.
 - [x] Add product/collection image upload, product gallery URLs, multiple document editing, and stock quantity input to the CMS.
-- [x] Use sized Next.js image components for CMS product previews and replace emoji used as decorative product/sync icons.
+- [x] Use sized Next.js image components for CMS product previews and replace decorative emoji with accessible SVG icons.
 - [x] Test customer-request owner scoping, content-editor restrictions, closed-request transitions, and media size limits against isolated SQLite.
 - [ ] Verify Firebase token revocation and execute/rollback schema migrations against staging Supabase; verify live storage policies and role boundaries there.
 
