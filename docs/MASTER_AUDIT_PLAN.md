@@ -18,6 +18,7 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 - [x] Preserve deliberately cleared values and empty arrays when CMS product drafts are returned.
 - [x] Avoid returning exception details and internal configuration in generic API 500 responses.
 - [x] Avoid returning database connection exception details in API 503 responses; return a retryable generic message while retaining server-side logs.
+- [x] Ignore stale CMS role-verification responses after a Firebase account changes; abort the previous check before accepting another account's role.
 - [x] Validate featured collection/product references when publishing Home content.
 - [x] Remove the fixed demo customer credentials and offline-auth bypass from the app entry screen.
 - [x] Remove the duplicate account-tab sign-in/sign-up form so all customer authentication goes through the verified-email entry flow.
@@ -31,6 +32,7 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 - [x] Make product stock status honest when the source has not provided availability; both CMS views distinguish unknown, out-of-stock, in-stock, and backorder.
 - [x] Remove an invented 22% MRP calculation and a static "Default Sales Channel" label from product listings; show source, published price, and reported stock instead.
 - [x] Add product/collection image upload, product gallery URLs, multiple document editing, and stock quantity input to the CMS.
+- [x] Use sized Next.js image components for CMS product previews and replace emoji used as decorative product/sync icons.
 - [ ] Verify auth role boundaries, owner-only customer reads, request transitions, upload limits, and migration constraints in an isolated environment.
 
 ## Priority 1 — Core CMS content workflows
@@ -147,6 +149,6 @@ CMS app-content parity checked from source:
 ## Verification notes
 
 - This document records source-level findings. No live service behavior can be confirmed without the external project credentials and source mappings.
-- Visual/device QA remains open. The UI/UX audit skill search utility was unavailable because Python launchers are not installed in the host environment; its built-in accessibility, touch-target, responsive-layout, form-feedback, and safe-area criteria were used as a fallback.
-- Local checks: CMS ESLint completed with two `@next/next/no-img-element` warnings and no errors; TypeScript `--noEmit` and a Next.js production-mode build passed with test values, including earlier explicit checks for the `sslip.io` test exception and rejection of arbitrary HTTP domains; the full backend suite passed (9 tests), including a database-error redaction regression, Python compilation passed, and Alembic offline SQL generation compiled through `6f3a1f8d2c70`; Flutter `analyze` and all six app tests passed, including product comparison rendering/removal, selection limits, and cached category-slug filtering. The Android release guard correctly stops until a production HTTPS API and release signing key are configured. No emulator/device is available, so installed-device visual verification remains open. No live database migration or staging deployment was run.
+- Visual/device QA remains open. The UI/UX Pro Max search returned guidance for visible labels, correct input types, password-manager support, and confirmation feedback; small-screen, landscape, dynamic-text, contrast, touch-target, and keyboard-focus checks still need rendered device/browser review.
+- Local checks: CMS ESLint reports zero errors or warnings; TypeScript `--noEmit` and a Next.js production-mode build passed with test values, including earlier explicit checks for the `sslip.io` test exception and rejection of arbitrary HTTP domains; the full backend suite passed (9 tests), including a database-error redaction regression, Python compilation passed, and Alembic offline SQL generation compiled through `6f3a1f8d2c70`; Flutter `analyze` and all six app tests passed, including product comparison rendering/removal, selection limits, and cached category-slug filtering. The Android release guard stops until a production HTTPS API and release signing key are configured. No emulator/device is available, so installed-device visual verification remains open. No live database migration or staging deployment was run.
 
