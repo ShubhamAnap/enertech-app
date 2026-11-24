@@ -33,6 +33,7 @@ REQUEST_TRANSITIONS = {
     },
 }
 CONTACT_INQUIRY_STATUSES = {"new", "in_progress", "waiting_for_customer", "resolved", "closed"}
+MAX_CUSTOMER_REQUESTS_PER_HOUR = 10
 
 
 def _require_verified_customer(identity: Identity) -> None:
@@ -58,6 +59,12 @@ def _to_admin(record: CustomerRequest) -> CustomerRequestAdmin:
 def _create(kind: str, payload: dict[str, object], identity: Identity, session: Session) -> CustomerRequestPublic:
     _require_verified_customer(identity)
     now = datetime.now(timezone.utc)
+    recent_count = session.scalar(select(func.count()).select_from(CustomerRequest).where(
+        CustomerRequest.customer_uid == identity.uid,
+        CustomerRequest.created_at >= now - timedelta(hours=1),
+    )) or 0
+    if recent_count >= MAX_CUSTOMER_REQUESTS_PER_HOUR:
+        raise HTTPException(status_code=429, detail="You have submitted several requests recently. Please try again later.")
     record = CustomerRequest(
         id=uuid4(), customer_uid=identity.uid, customer_email=identity.email or "",
         kind=kind, status="submitted", payload=payload, created_at=now, updated_at=now,
