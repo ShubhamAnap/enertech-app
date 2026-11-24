@@ -16,7 +16,7 @@ Updated 2026-11-24. The project contains the customer app, CMS, API, and Coolify
 
 - Alembic upgraded the local PostgreSQL schema to `e21a7c0d9f43`.
 - Backend: 9 pytest checks pass; Python compilation passes.
-- CMS: ESLint reports zero errors and two image-optimization warnings; TypeScript `--noEmit` and a Next.js production-mode build pass with test values.
+- CMS: ESLint reports zero errors or warnings; TypeScript `--noEmit` and a Next.js production-mode build pass with test values.
 - Mobile: Flutter analysis reports no issues and all 6 widget/unit tests pass.
 - No live-configured CMS image or production APK was produced because the deployment Firebase/API values and production signing key are not configured.
 
