@@ -216,6 +216,35 @@ def test_catalogue_accepts_cms_max_page_size(client: TestClient) -> None:
     assert response.json()["limit"] == 500
 
 
+def test_catalogue_can_fetch_published_featured_products_by_id(client: TestClient) -> None:
+    with Session(api_router.engine) as session:
+        category = ProductCategory(slug="featured-id-category", name="Featured ID", is_published=True)
+        session.add(category)
+        session.flush()
+        hidden_category = ProductCategory(slug="featured-hidden-category", name="Hidden", is_published=False)
+        session.add(hidden_category)
+        session.flush()
+        target = Product(slug="featured-after-first-page", name="ZZZ Featured", category_id=category.id, is_published=True)
+        hidden = Product(slug="featured-unpublished", name="Unpublished", category_id=category.id, is_published=False)
+        hidden_parent = Product(slug="featured-hidden-parent", name="Hidden parent", category_id=hidden_category.id, is_published=True)
+        session.add_all([target, hidden, hidden_parent])
+        session.flush()
+        for index in range(300):
+            session.add(Product(slug=f"feature-page-{index:03}", name=f"Product {index:03}", category_id=category.id, is_published=True))
+        session.commit()
+        target_id, hidden_id, hidden_parent_id = target.id, hidden.id, hidden_parent.id
+
+    response = client.get(f"/api/v1/catalogue/products?ids={target_id},{hidden_id},{hidden_parent_id}&limit=12")
+    assert response.status_code == 200
+    assert [product["id"] for product in response.json()["items"]] == [str(target_id)]
+    assert response.json()["total"] == 1
+
+
+def test_catalogue_rejects_invalid_featured_product_ids(client: TestClient) -> None:
+    assert client.get("/api/v1/catalogue/products?ids=not-a-uuid").status_code == 422
+    assert client.get("/api/v1/catalogue/products?ids=" + ",".join(str(uuid4()) for _ in range(13))).status_code == 422
+
+
 @pytest.mark.parametrize("query", ["limit=0", "limit=501", "offset=-1", "q=" + ("x" * 121)])
 def test_invalid_catalogue_parameters_are_rejected(client: TestClient, query: str) -> None:
     assert client.get(f"/api/v1/catalogue/products?{query}").status_code == 422
