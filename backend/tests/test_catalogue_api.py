@@ -16,7 +16,7 @@ from app.core.auth import Identity, get_current_identity
 from app.db.base import Base
 from app.db.session import get_session
 from app.main import app
-from app.models import AdminAccount, CustomerRequest, Product, ProductCategory
+from app.models import AdminAccount, ContactInquiry, CustomerRequest, Product, ProductCategory
 
 
 @pytest.fixture
@@ -80,6 +80,26 @@ def test_customer_requests_are_scoped_to_the_verified_identity(client: TestClien
     rows = client.get("/api/v1/requests").json()
     assert len(rows) == 1
     assert rows[0]["id"] == second.json()["id"]
+
+
+def test_contact_inquiry_rate_limit_uses_customer_uid_not_mutable_email(client: TestClient) -> None:
+    identity = Identity("customer-a", "a@example.test", "Customer A", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: identity
+    body = {"name": "Customer A", "phone": "+1 555 555 5555", "message": "Please contact me"}
+
+    for _ in range(5):
+        response = client.post("/api/v1/requests/contact-inquiry", json=body)
+        assert response.status_code == 201
+
+    identity = Identity("customer-a", "new-address@example.test", "Customer A", {"email_verified": True})
+    assert client.post("/api/v1/requests/contact-inquiry", json=body).status_code == 429
+
+    identity = Identity("customer-b", "b@example.test", "Customer B", {"email_verified": True})
+    assert client.post("/api/v1/requests/contact-inquiry", json=body).status_code == 201
+    with Session(api_router.engine) as session:
+        rows = session.query(ContactInquiry).all()
+        assert len(rows) == 6
+        assert {row.customer_uid for row in rows} == {"customer-a", "customer-b"}
 
 
 def test_content_editor_cannot_read_customer_directory(client: TestClient) -> None:
