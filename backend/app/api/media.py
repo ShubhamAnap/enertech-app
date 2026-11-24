@@ -56,19 +56,18 @@ async def upload_media(
     storage_path = f"cms/{uuid4().hex}{extension}"
     storage_url = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/{bucket}/{storage_path}"
     try:
-        response = httpx.put(
-            storage_url,
-            content=payload,
-            headers={
-                "apikey": settings.supabase_service_role_key,
-                "Authorization": f"Bearer {settings.supabase_service_role_key}",
-                "Content-Type": content_type,
-                "x-upsert": "false",
-                "cache-control": "31536000",
-            },
-            timeout=25,
-            follow_redirects=False,
-        )
+        async with httpx.AsyncClient(timeout=25, follow_redirects=False) as client:
+            response = await client.put(
+                storage_url,
+                content=payload,
+                headers={
+                    "apikey": settings.supabase_service_role_key,
+                    "Authorization": f"Bearer {settings.supabase_service_role_key}",
+                    "Content-Type": content_type,
+                    "x-upsert": "false",
+                    "cache-control": "31536000",
+                },
+            )
     except httpx.TimeoutException as error:
         raise HTTPException(status_code=504, detail="Supabase Storage upload timed out") from error
     except httpx.HTTPError as error:
@@ -85,3 +84,4 @@ async def upload_media(
     ))
     session.commit()
     return MediaAssetPublic(url=public_url, path=storage_path, bucket=bucket, content_type=content_type, size_bytes=len(payload))
+
