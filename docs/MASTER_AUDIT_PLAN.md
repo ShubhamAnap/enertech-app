@@ -37,6 +37,7 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 - [x] Add product/collection image upload, product gallery URLs, multiple document editing, and stock quantity input to the CMS.
 - [x] Use sized Next.js image components for CMS product previews and replace decorative emoji with accessible SVG icons.
 - [x] Test customer-request owner scoping, content-editor restrictions, closed-request transitions, media size limits, and contact-inquiry limits keyed by Firebase UID against isolated SQLite.
+- [x] Rate-limit quote and service submissions together to ten per verified Firebase account per hour; index customer UID plus request creation time and test the cross-endpoint cap.
 - [ ] Verify Firebase token revocation and execute/rollback schema migrations against staging Supabase; verify live storage policies and role boundaries there.
 
 ## Priority 1 — Core CMS content workflows
@@ -63,7 +64,7 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 - [ ] Decide and implement notification behavior; the former home bell now opens My Requests, and there is no notification backend.
 - [x] Remove the unimplemented equipment-registration entry point and the incorrectly categorized warranty/AMC link; the current document model cannot verify coverage type.
 - [ ] Implement registered-equipment ownership, warranty/AMC coverage, and service-history workflows after the business rules and source of truth are confirmed.
-- [x] Wire the contact-inquiry API to the customer support form and admin queue with verified-account and database-backed rate limits.
+- [x] Wire the contact-inquiry API to the customer support form and admin queue with verified-account and database-backed rate limits; quote and service requests also share a database-backed ten-per-hour account cap.
 - [x] Confirm every editable Home/Solution Finder/Contact/Brand/FAQ field is visible in the app and document unsupported fields; Home search/intent copy and Brand support icon are now connected, while provider-specific chat scripting remains external.
 - [x] Trace the current CMS app-content fields against their mobile consumers; the concrete gaps are listed below.
 
@@ -155,5 +156,5 @@ CMS app-content parity checked from source:
 
 - This document records source-level findings. No live service behavior can be confirmed without the external project credentials and source mappings.
 - Visual/device QA remains open. The UI/UX Pro Max search returned guidance for visible labels, correct input types, password-manager support, and confirmation feedback; small-screen, landscape, dynamic-text, contrast, touch-target, and keyboard-focus checks still need rendered device/browser review.
-- Local checks: CMS ESLint reports zero errors or warnings; TypeScript `--noEmit` and a Next.js production-mode build passed with test values, including earlier explicit checks for the `sslip.io` test exception and rejection of arbitrary HTTP domains; all 16 backend tests passed, including bootstrap-admin revocation, database-error redaction, async media upload/size enforcement, owner scoping, editor authorization, request-transition checks, and stable-UID contact rate limiting; Python compilation passed, and Alembic offline SQL generation compiled through `a91d4c62e810`; Flutter `analyze` and all six app tests passed, including product comparison rendering/removal, selection limits, and cached category-slug filtering. The Android release guard stops until a production HTTPS API and release signing key are configured. No emulator/device is available, so installed-device visual verification remains open. No live database migration or staging deployment was run.
+- Local checks: CMS ESLint reports zero errors or warnings; TypeScript `--noEmit` and a Next.js production-mode build passed with test values, including earlier explicit checks for the `sslip.io` test exception and rejection of arbitrary HTTP domains; all 17 backend tests passed, including bootstrap-admin revocation, database-error redaction, async media upload/size enforcement, owner scoping, editor authorization, request-transition checks, contact UID rate limiting, and shared quote/service request rate limiting; Python compilation passed, and Alembic offline SQL generation compiled through `c42e17b3d906`; Flutter `analyze` and all six app tests passed, including product comparison rendering/removal, selection limits, and cached category-slug filtering. The Android release guard stops until a production HTTPS API and release signing key are configured. No emulator/device is available, so installed-device visual verification remains open. No live database migration or staging deployment was run.
 
