@@ -1,7 +1,7 @@
 services:
   api:
     build:
-      context: ../../backend
+      context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
@@ -32,7 +32,7 @@ services:
 
   admin:
     build:
-      context: ../../apps/admin
+      context: ./apps/admin
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?set the public API URL}
