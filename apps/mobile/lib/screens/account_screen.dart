@@ -4,7 +4,6 @@ import 'package:material_ui/material_ui.dart';
 
 import '../data/customer_profile_repository.dart';
 import '../theme/app_theme.dart';
-import '../widgets/app_components.dart';
 
 class AccountScreen extends StatefulWidget {
   const AccountScreen({super.key});
@@ -19,8 +18,7 @@ class _AccountScreenState extends State<AccountScreen> {
   final _profiles = CustomerProfileRepository();
   bool _createAccount = false;
   bool _working = false;
-  String? _message;
-  String? _error;
+    String? _error;
 
   bool get _configured => Firebase.apps.isNotEmpty;
 
@@ -31,54 +29,6 @@ class _AccountScreenState extends State<AccountScreen> {
     super.dispose();
   }
 
-  void _changeServerUrl(BuildContext context) {
-    final controller = TextEditingController(text: CustomerProfileRepository.effectiveBaseUrl);
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Backend API Server'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Configure the backend endpoint for catalogue and profile synchronization:',
-              style: TextStyle(fontSize: 13, color: AppColors.muted),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: controller,
-              decoration: const InputDecoration(
-                labelText: 'API Base URL',
-                hintText: 'e.g. http://192.168.1.50:8000/api/v1',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final newUrl = controller.text.trim();
-              if (newUrl.isNotEmpty) {
-                CustomerProfileRepository.setCustomBaseUrl(newUrl);
-                setState(() {});
-                Navigator.of(ctx).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Server URL set to: $newUrl')),
-                );
-              }
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _editProfile(BuildContext context, CustomerProfile profile, User user) {
     final nameCtrl = TextEditingController(text: profile.name);
     final mobileCtrl = TextEditingController(text: profile.mobileNumber);
@@ -86,6 +36,7 @@ class _AccountScreenState extends State<AccountScreen> {
     final companyCtrl = TextEditingController(text: profile.companyName ?? '');
     final gstCtrl = TextEditingController(text: profile.gstNumber ?? '');
     String selectedRole = profile.customerType;
+    String? sheetError;
 
     showModalBottomSheet<void>(
       context: context,
@@ -109,18 +60,18 @@ class _AccountScreenState extends State<AccountScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
-                    'Edit Profile & Account Type',
+                    'Edit Profile & Business Details',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.ink),
                   ),
                   const SizedBox(height: 14),
-                  const Text('Account Type', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.muted)),
+                  const Text('Account Role', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.muted)),
                   const SizedBox(height: 6),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: [
                       _RoleChip(
-                        label: 'End User',
+                        label: 'End User / Consumer',
                         selected: selectedRole == 'end_user',
                         onTap: () => setSheetState(() => selectedRole = 'end_user'),
                       ),
@@ -141,20 +92,7 @@ class _AccountScreenState extends State<AccountScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  if (isBusiness) ...[
-                    TextField(
-                      controller: companyCtrl,
-                      decoration: const InputDecoration(labelText: 'Company / Business Name *', prefixIcon: Icon(Icons.business_rounded)),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: gstCtrl,
-                      textCapitalization: TextCapitalization.characters,
-                      decoration: const InputDecoration(labelText: 'GSTIN / GST Number *', prefixIcon: Icon(Icons.receipt_long_outlined)),
-                    ),
-                    const SizedBox(height: 10),
-                  ],
+                  const SizedBox(height: 14),
                   TextField(
                     controller: nameCtrl,
                     decoration: const InputDecoration(labelText: 'Full Name *', prefixIcon: Icon(Icons.person_outline_rounded)),
@@ -168,49 +106,67 @@ class _AccountScreenState extends State<AccountScreen> {
                   const SizedBox(height: 10),
                   TextField(
                     controller: locationCtrl,
-                    decoration: const InputDecoration(labelText: 'Location (City, State) *', prefixIcon: Icon(Icons.location_on_outlined)),
+                    decoration: const InputDecoration(labelText: 'City / Location *', prefixIcon: Icon(Icons.location_on_outlined)),
                   ),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: companyCtrl,
+                    decoration: InputDecoration(
+                      labelText: isBusiness ? 'Company Name *' : 'Company Name (Optional)',
+                      prefixIcon: const Icon(Icons.business_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: gstCtrl,
+                    textCapitalization: TextCapitalization.characters,
+                    maxLength: 15,
+                    decoration: InputDecoration(
+                      labelText: isBusiness ? 'GST Number (15 chars) *' : 'GST Number (Optional)',
+                      prefixIcon: const Icon(Icons.receipt_long_outlined),
+                      counterText: '',
+                    ),
+                  ),
+                  if (sheetError != null) ...[
+                    const SizedBox(height: 8),
+                    Text(sheetError!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+                  ],
+                  const SizedBox(height: 16),
                   FilledButton(
                     onPressed: () async {
                       final name = nameCtrl.text.trim();
                       final mobile = mobileCtrl.text.trim();
-                      final location = locationCtrl.text.trim();
-                      final company = companyCtrl.text.trim();
+                      final loc = locationCtrl.text.trim();
+                      final comp = companyCtrl.text.trim();
                       final gst = gstCtrl.text.trim().toUpperCase();
 
-                      if (name.isEmpty || mobile.isEmpty || location.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Please fill all required fields.')),
-                        );
+                      if (name.isEmpty || mobile.isEmpty || loc.isEmpty) {
+                        setSheetState(() => sheetError = 'Name, mobile, and location are required.');
                         return;
                       }
-                      if (isBusiness && (company.isEmpty || gst.isEmpty)) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Company name and GST number are required for business accounts.')),
-                        );
-                        return;
+                      if (isBusiness) {
+                        if (comp.isEmpty) {
+                          setSheetState(() => sheetError = 'Company name is required for business accounts.');
+                          return;
+                        }
+                        if (gst.length != 15) {
+                          setSheetState(() => sheetError = 'Enter a valid 15-character GST Number.');
+                          return;
+                        }
                       }
 
-                      await _profiles.save(
-                        {
-                          'customer_type': selectedRole,
-                          'name': name,
-                          'mobile_number': mobile,
-                          'email': user.email ?? '',
-                          'location': location,
-                          'company_name': isBusiness ? company : null,
-                          'gst_number': isBusiness ? gst : null,
-                        },
-                        userUid: user.uid,
-                      );
-                      if (mounted) {
-                        Navigator.of(ctx).pop();
-                        setState(() {});
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Profile updated successfully!')),
-                        );
-                      }
+                      await _profiles.save({
+                        'customer_type': selectedRole,
+                        'name': name,
+                        'mobile_number': mobile,
+                        'email': user.email ?? profile.email,
+                        'location': loc,
+                        'company_name': comp.isNotEmpty ? comp : null,
+                        'gst_number': gst.isNotEmpty ? gst : null,
+                      }, userUid: user.uid);
+
+                      if (ctx.mounted) Navigator.of(ctx).pop();
+                      if (mounted) setState(() {});
                     },
                     child: const Text('Save Changes'),
                   ),
@@ -223,213 +179,235 @@ class _AccountScreenState extends State<AccountScreen> {
     );
   }
 
-  Future<void> _submit() async {
-    setState(() { _working = true; _error = null; _message = null; });
+  Future<void> _submitAuth() async {
+    FocusScope.of(context).unfocus();
+    final email = _email.text.trim();
+    final password = _password.text;
+    if (email.isEmpty || !email.contains('@')) {
+      setState(() => _error = 'Enter a valid email address.');
+      return;
+    }
+    if (password.length < 6) {
+      setState(() => _error = 'Password must be at least 6 characters.');
+      return;
+    }
+    setState(() {
+      _working = true;
+      _error = null;
+    });
     try {
       final auth = FirebaseAuth.instance;
       if (_createAccount) {
-        final credential = await auth.createUserWithEmailAndPassword(email: _email.text.trim(), password: _password.text);
-        try {
-          await credential.user?.sendEmailVerification();
-        } catch (_) {}
-        setState(() => _message = 'Account created successfully!');
+        await auth.createUserWithEmailAndPassword(email: email, password: password);
       } else {
-        await auth.signInWithEmailAndPassword(email: _email.text.trim(), password: _password.text);
+        await auth.signInWithEmailAndPassword(email: email, password: password);
       }
-    } on FirebaseAuthException catch (exception) {
-      setState(() => _error = switch (exception.code) {
-        'invalid-email' => 'Enter a valid email address.',
-        'weak-password' => 'Choose a stronger password (at least 6 characters).',
-        'email-already-in-use' => 'An account already exists for this email.',
-        'invalid-credential' || 'wrong-password' || 'user-not-found' => 'Email or password is incorrect.',
-        'too-many-requests' => 'Too many attempts. Wait a little, then try again.',
-        _ => exception.message ?? 'Authentication could not be completed. Try again.',
-      });
-    } catch (_) {
-      setState(() => _error = 'Authentication could not be completed. Check your connection and try again.');
+    } on FirebaseAuthException catch (e) {
+      setState(() => _error = e.message ?? 'Authentication failed.');
     } finally {
       if (mounted) setState(() => _working = false);
     }
   }
 
-  Future<void> _resetPassword() async {
-    if (_email.text.trim().isEmpty) { setState(() => _error = 'Enter your email address first.'); return; }
-    try {
-      await FirebaseAuth.instance.sendPasswordResetEmail(email: _email.text.trim());
-      setState(() { _error = null; _message = 'Password reset instructions have been sent to your email.'; });
-    } on FirebaseAuthException catch (exception) {
-      setState(() => _error = exception.message ?? 'Could not send the password reset email.');
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    if (!_configured) return _buildSetup();
+    if (!_configured) {
+      return const Center(child: Text('Firebase not configured.'));
+    }
+
     return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snapshot) => snapshot.data == null ? _buildSignIn() : _buildAccount(snapshot.data!),
+      stream: FirebaseAuth.instance.userChanges(),
+      builder: (context, snapshot) {
+        final user = snapshot.data;
+        if (user == null) {
+          return _buildSignedOutView();
+        }
+        return _buildSignedInView(user);
+      },
     );
   }
 
-  Widget _buildSetup() => ListView(padding: const EdgeInsets.fromLTRB(20, 22, 20, 28), children: [
-    const Text('Account', style: TextStyle(color: AppColors.ink, fontSize: 24, fontWeight: FontWeight.w800)),
-    const SizedBox(height: 5),
-    const Text('Create an account or sign in to manage your requests.', style: TextStyle(color: AppColors.muted, fontSize: 13)),
-    const SizedBox(height: 18),
-    const NoticeCard(message: 'Firebase Authentication is not configured. Add the public Firebase app values to apps/mobile/.env to enable sign-in and registration.'),
-    const SizedBox(height: 12),
-    const _AccountAction(icon: Icons.business_outlined, title: 'Business profile', detail: 'Available after account setup'),
-    const _AccountAction(icon: Icons.location_on_outlined, title: 'Project locations', detail: 'Available after account setup'),
-  ]);
-
-  Widget _buildSignIn() => ListView(padding: const EdgeInsets.fromLTRB(20, 22, 20, 28), children: [
-    const Text('Account', style: TextStyle(color: AppColors.ink, fontSize: 24, fontWeight: FontWeight.w800)),
-    const SizedBox(height: 5),
-    const Text('Manage your profile and preferences.', style: TextStyle(color: AppColors.muted, fontSize: 13)),
-    const SizedBox(height: 18),
-    Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Text(_createAccount ? 'Create your EnerTech account' : 'Sign in to EnerTech', style: const TextStyle(color: AppColors.ink, fontSize: 16, fontWeight: FontWeight.w700)),
-      const SizedBox(height: 12),
-      TextField(controller: _email, keyboardType: TextInputType.emailAddress, autofillHints: const [AutofillHints.email], decoration: const InputDecoration(labelText: 'Email address', prefixIcon: Icon(Icons.mail_outline_rounded))),
-      const SizedBox(height: 10),
-      TextField(controller: _password, obscureText: true, autofillHints: [_createAccount ? AutofillHints.newPassword : AutofillHints.password], decoration: const InputDecoration(labelText: 'Password', prefixIcon: Icon(Icons.lock_outline_rounded))),
-      if (_error != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(_error!, style: const TextStyle(color: Color(0xFF9A3029), fontSize: 12))),
-      if (_message != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(_message!, style: const TextStyle(color: Color(0xFF21613A), fontSize: 12))),
-      const SizedBox(height: 14),
-      FilledButton(onPressed: _working ? null : _submit, child: _working ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : Text(_createAccount ? 'Create account' : 'Sign in')),
-      TextButton(onPressed: () => setState(() { _createAccount = !_createAccount; _error = null; _message = null; }), child: Text(_createAccount ? 'Already have an account? Sign in' : 'New to EnerTech? Create an account')),
-      if (!_createAccount) TextButton(onPressed: _resetPassword, child: const Text('Forgot password?')),
-    ]))),
-    const SizedBox(height: 10),
-    const NoticeCard(message: 'Your sign-in is handled securely by Firebase.'),
-  ]);
-
-  Widget _buildAccount(User user) => FutureBuilder<CustomerProfile?>(
-    future: _profiles.loadMine(userUid: user.uid),
-    builder: (context, snapshot) {
-      final profile = snapshot.data;
-      final roleText = profile?.roleDisplayName ?? 'Customer';
-      final isBiz = profile?.isBusiness ?? false;
-
-      return ListView(
-        padding: const EdgeInsets.fromLTRB(20, 22, 20, 28),
+  Widget _buildSignedOutView() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Account', style: TextStyle(color: AppColors.ink, fontSize: 24, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 5),
-          const Text('Manage your profile and business details.', style: TextStyle(color: AppColors.muted, fontSize: 13)),
-          const SizedBox(height: 18),
+          const Text('Account', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppColors.ink)),
+          const SizedBox(height: 6),
+          const Text('Sign in to manage your profile and view requests.', style: TextStyle(color: AppColors.muted, fontSize: 13)),
+          const SizedBox(height: 20),
+          TextField(
+            controller: _email,
+            keyboardType: TextInputType.emailAddress,
+            decoration: const InputDecoration(labelText: 'Email address', prefixIcon: Icon(Icons.mail_outline_rounded)),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _password,
+            obscureText: true,
+            decoration: const InputDecoration(labelText: 'Password', prefixIcon: Icon(Icons.lock_outline_rounded)),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+          ],
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: _working ? null : _submitAuth,
+            child: _working ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : Text(_createAccount ? 'Create Account' : 'Sign In'),
+          ),
+          TextButton(
+            onPressed: () => setState(() => _createAccount = !_createAccount),
+            child: Text(_createAccount ? 'Already have an account? Sign in' : 'New to EnerTech? Create an account'),
+          ),
+        ],
+      ),
+    );
+  }
 
-          // User Card
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEAF3FA),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: const Icon(Icons.person_outline_rounded, color: AppColors.blue, size: 28),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          profile?.name.isNotEmpty == true ? profile!.name : (user.displayName ?? 'EnerTech Customer'),
-                          style: const TextStyle(color: AppColors.ink, fontWeight: FontWeight.w700, fontSize: 16),
+  Widget _buildSignedInView(User user) {
+    return FutureBuilder<CustomerProfile?>(
+      future: _profiles.loadMine(userUid: user.uid),
+      builder: (context, profileSnapshot) {
+        final profile = profileSnapshot.data;
+        final role = profile?.customerType ?? 'end_user';
+        final roleText = switch (role) {
+          'reseller' => 'Reseller Partner',
+          'epc' => 'EPC Contractor',
+          'distributor' => 'Authorized Distributor',
+          _ => 'End User / Consumer',
+        };
+
+        final initial = (profile?.name.isNotEmpty == true ? profile!.name : (user.displayName ?? user.email ?? 'E')).substring(0, 1).toUpperCase();
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+          children: [
+            const Text('Account', style: TextStyle(color: AppColors.ink, fontSize: 24, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 5),
+            const Text('Manage your profile and business details.', style: TextStyle(color: AppColors.muted, fontSize: 13)),
+            const SizedBox(height: 16),
+
+            // User Identity Card
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 54,
+                      height: 54,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEAF3FA),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Center(
+                        child: Text(
+                          initial,
+                          style: const TextStyle(color: AppColors.blue, fontWeight: FontWeight.w800, fontSize: 22),
                         ),
-                        const SizedBox(height: 3),
-                        Text(user.email ?? '', style: const TextStyle(color: AppColors.muted, fontSize: 12)),
-                        const SizedBox(height: 5),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: AppColors.blue.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            profile?.name.isNotEmpty == true ? profile!.name : (user.displayName ?? 'EnerTech Customer'),
+                            style: const TextStyle(color: AppColors.ink, fontWeight: FontWeight.w800, fontSize: 17),
                           ),
-                          child: Text(
-                            roleText,
-                            style: const TextStyle(
-                              color: AppColors.blue,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 11,
+                          const SizedBox(height: 2),
+                          Text(user.email ?? profile?.email ?? '', style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+                          const SizedBox(height: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: AppColors.blue.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              roleText,
+                              style: const TextStyle(color: AppColors.blue, fontWeight: FontWeight.w700, fontSize: 11),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
 
-          const SizedBox(height: 14),
+            const SizedBox(height: 16),
+            const Text('PROFILE DETAILS', style: TextStyle(color: AppColors.muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+            const SizedBox(height: 8),
 
-          // Role & Business details
-          if (profile != null) ...[
+            // Profile Fields
             _AccountAction(
               icon: Icons.badge_outlined,
               title: 'Account Role',
               detail: roleText,
-              onTap: () => _editProfile(context, profile, user),
+              onTap: profile != null ? () => _editProfile(context, profile, user) : null,
             ),
-            if (isBiz && profile.companyName != null && profile.companyName!.isNotEmpty)
-              _AccountAction(
-                icon: Icons.business_outlined,
-                title: 'Company Name',
-                detail: profile.companyName!,
-                onTap: () => _editProfile(context, profile, user),
+            _AccountAction(
+              icon: Icons.mail_outline_rounded,
+              title: 'Email Address',
+              detail: user.email ?? profile?.email ?? 'Not provided',
+              onTap: null, // Email managed via auth
+            ),
+            _AccountAction(
+              icon: Icons.phone_outlined,
+              title: 'Mobile Number',
+              detail: profile?.mobileNumber.isNotEmpty == true ? profile!.mobileNumber : 'Add mobile number',
+              onTap: profile != null ? () => _editProfile(context, profile, user) : null,
+            ),
+            _AccountAction(
+              icon: Icons.business_outlined,
+              title: 'Company Name',
+              detail: profile?.companyName?.isNotEmpty == true ? profile!.companyName! : 'Add company name',
+              onTap: profile != null ? () => _editProfile(context, profile, user) : null,
+            ),
+            _AccountAction(
+              icon: Icons.receipt_long_outlined,
+              title: 'GST Number (GSTIN)',
+              detail: profile?.gstNumber?.isNotEmpty == true ? profile!.gstNumber! : 'Add GSTIN',
+              onTap: profile != null ? () => _editProfile(context, profile, user) : null,
+            ),
+            _AccountAction(
+              icon: Icons.location_on_outlined,
+              title: 'Location / City',
+              detail: profile?.location.isNotEmpty == true ? profile!.location : 'Add location',
+              onTap: profile != null ? () => _editProfile(context, profile, user) : null,
+            ),
+
+            const SizedBox(height: 20),
+
+            // Edit Profile Button
+            if (profile != null)
+              FilledButton.icon(
+                onPressed: () => _editProfile(context, profile, user),
+                icon: const Icon(Icons.edit_note_rounded, size: 20),
+                label: const Text('Edit Profile & Business Details'),
               ),
-            if (isBiz && profile.gstNumber != null && profile.gstNumber!.isNotEmpty)
-              _AccountAction(
-                icon: Icons.receipt_long_outlined,
-                title: 'GST Number',
-                detail: profile.gstNumber!,
-                onTap: () => _editProfile(context, profile, user),
-              ),
-            if (profile.mobileNumber.isNotEmpty)
-              _AccountAction(
-                icon: Icons.phone_outlined,
-                title: 'Mobile Number',
-                detail: profile.mobileNumber,
-                onTap: () => _editProfile(context, profile, user),
-              ),
-            if (profile.location.isNotEmpty)
-              _AccountAction(
-                icon: Icons.location_on_outlined,
-                title: 'Location',
-                detail: profile.location,
-                onTap: () => _editProfile(context, profile, user),
-              ),
-            const SizedBox(height: 5),
+
+            const SizedBox(height: 12),
+
+            // Sign Out
+            OutlinedButton.icon(
+              onPressed: () {
+                CustomerProfileRepository.clearCache();
+                FirebaseAuth.instance.signOut();
+              },
+              icon: const Icon(Icons.logout_rounded, size: 18),
+              label: const Text('Sign out'),
+            ),
           ],
-
-          _AccountAction(
-            icon: Icons.dns_outlined,
-            title: 'Server Connection',
-            detail: CustomerProfileRepository.effectiveBaseUrl,
-            onTap: () => _changeServerUrl(context),
-          ),
-
-          const SizedBox(height: 18),
-          OutlinedButton.icon(
-            onPressed: () {
-              CustomerProfileRepository.clearCache();
-              FirebaseAuth.instance.signOut();
-            },
-            icon: const Icon(Icons.logout_rounded),
-            label: const Text('Sign out'),
-          ),
-        ],
-      );
-    },
-  );
+        );
+      },
+    );
+  }
 }
 
 class _RoleChip extends StatelessWidget {
@@ -467,13 +445,21 @@ class _AccountAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 9),
+    padding: const EdgeInsets.only(bottom: 8),
     child: Card(
       child: ListTile(
-        leading: Icon(icon, color: AppColors.blue),
-        title: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-        subtitle: Text(detail, style: const TextStyle(fontSize: 11, color: AppColors.muted)),
-        trailing: Icon(onTap != null ? Icons.edit_outlined : Icons.chevron_right_rounded, color: AppColors.muted, size: 20),
+        leading: Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            color: const Color(0xFFF4F8FB),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: AppColors.blue, size: 20),
+        ),
+        title: Text(title, style: const TextStyle(color: AppColors.muted, fontSize: 11, fontWeight: FontWeight.w600)),
+        subtitle: Text(detail, style: const TextStyle(color: AppColors.ink, fontSize: 14, fontWeight: FontWeight.w700)),
+        trailing: onTap != null ? const Icon(Icons.edit_outlined, size: 18, color: AppColors.muted) : null,
         onTap: onTap,
       ),
     ),

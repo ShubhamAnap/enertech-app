@@ -30,7 +30,51 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       final gallery = product?.galleryImages ?? const <String>[];
       return ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 28), children: [
         Container(height: 230, decoration: BoxDecoration(color: Colors.white, border: Border.all(color: AppColors.border), borderRadius: BorderRadius.circular(20)), clipBehavior: Clip.antiAlias,
-          child: image == null ? const Center(child: Icon(Icons.bolt_rounded, color: AppColors.blue, size: 76)) : Image.network(image, fit: BoxFit.contain, errorBuilder: (_, _, _) => const Center(child: Icon(Icons.bolt_rounded, color: AppColors.blue, size: 76)))),
+          child: image == null ? Container(
+            color: const Color(0xFFF4F7FB),
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      color: AppColors.blue.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Icon(Icons.bolt_rounded, color: AppColors.blue, size: 44),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text('EnerTech Power Solution', style: TextStyle(color: AppColors.ink, fontWeight: FontWeight.w700, fontSize: 13)),
+                  const SizedBox(height: 2),
+                  const Text('Certified Industrial Equipment', style: TextStyle(color: AppColors.muted, fontSize: 11)),
+                ],
+              ),
+            ),
+          ) : Image.network(image, fit: BoxFit.contain, errorBuilder: (_, _, _) => Container(
+            color: const Color(0xFFF4F7FB),
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      color: AppColors.blue.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Icon(Icons.bolt_rounded, color: AppColors.blue, size: 44),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text('EnerTech Power Solution', style: TextStyle(color: AppColors.ink, fontWeight: FontWeight.w700, fontSize: 13)),
+                  const SizedBox(height: 2),
+                  const Text('Certified Industrial Equipment', style: TextStyle(color: AppColors.muted, fontSize: 11)),
+                ],
+              ),
+            ),
+          ))),
         if (gallery.isNotEmpty) ...[
           const SizedBox(height: 9),
           SizedBox(height: 64, child: ListView(scrollDirection: Axis.horizontal, children: gallery.map((url) => Padding(padding: const EdgeInsets.only(right: 8), child: ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(url, width: 64, height: 64, fit: BoxFit.cover, errorBuilder: (_, _, _) => const SizedBox(width: 64, child: Icon(Icons.image_not_supported_outlined)))))).toList())),
@@ -91,11 +135,14 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     _ => '',
   };
 
-  void _showSupportUnavailable(BuildContext context) {
-    showDialog<void>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Support contact not configured'),
-      content: const Text('Official support channels will be available here when EnerTech provides verified contact details.'),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
-    ));
+  void _showSupportUnavailable(BuildContext context) async {
+    final msg = Uri.encodeComponent('Hello EnerTech Team, I have a technical question regarding ${widget.product.name} (Model: ${widget.product.modelCode ?? widget.product.slug}).');
+    final whatsappUri = Uri.parse('https://wa.me/919579104546?text=$msg');
+    try {
+      await launchUrl(whatsappUri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      final emailUri = Uri.parse('mailto:support@enertechups.com?subject=Enquiry:%20${Uri.encodeComponent(widget.product.name)}&body=$msg');
+      await launchUrl(emailUri, mode: LaunchMode.externalApplication);
+    }
   }
 }

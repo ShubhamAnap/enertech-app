@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'catalogue_models.dart';
 import 'customer_profile_repository.dart';
@@ -15,104 +16,60 @@ class CatalogueException implements Exception {
 }
 
 class CatalogueRepository {
-  CatalogueRepository({String? baseUrl})
-      : _baseUrl = baseUrl;
+  CatalogueRepository({String? baseUrl}) : _baseUrl = baseUrl;
 
   final String? _baseUrl;
 
   String get baseUrl => _baseUrl ?? CustomerProfileRepository.effectiveBaseUrl;
 
-  static const List<ProductCategory> _fallbackCategories = [
-    ProductCategory(
-      id: 'cat-online-ups',
-      slug: 'online-ups',
-      name: 'Online UPS Systems',
-      description: 'True online double-conversion UPS systems for critical loads.',
-    ),
-    ProductCategory(
-      id: 'cat-solar',
-      slug: 'solar-inverters',
-      name: 'Solar Hybrid Inverters',
-      description: 'High-efficiency bi-directional solar inverters with MPPT.',
-    ),
-    ProductCategory(
-      id: 'cat-bess',
-      slug: 'bess',
-      name: 'Battery Energy Storage (BESS)',
-      description: 'Scalable LiFePO4 energy storage systems for industrial continuity.',
-    ),
-    ProductCategory(
-      id: 'cat-ahf',
-      slug: 'active-filters',
-      name: 'Active Harmonic Filters',
-      description: 'Dynamic power factor correction and harmonic distortion mitigation.',
-    ),
-  ];
-
-  static const List<ProductDetails> _fallbackProducts = [
-    ProductDetails(
-      id: 'prod-maxipro-33',
-      slug: 'maxipro-33-ups',
-      name: 'EnerTech Maxi-Pro 33 (10kVA - 500kVA)',
-      categoryId: 'cat-online-ups',
-      modelCode: 'ET-MP-33',
-      summary: 'Heavy-duty 3-phase industrial double-conversion online UPS.',
-      description: 'Engineered for extreme power environments, medical imaging, IT servers, and process industries. Features galvanic isolation and high overload capability.',
-      applications: ['Hospitals & Healthcare', 'Data Centers', 'Continuous Process Plants', 'Commercial Towers'],
-      features: ['Galvanic Isolation Transformer', 'True Double Conversion Online Topology', 'Parallel redundancy up to 8 units', 'Intelligent battery management (IBMS)'],
-      specifications: {'Topology': 'Online Double Conversion', 'Input Voltage': '400V 3-Phase ±20%', 'Output Power Factor': '0.9 / 1.0', 'Efficiency': '> 94%'},
-    ),
-    ProductDetails(
-      id: 'prod-sunmax-hybrid',
-      slug: 'sunmax-hybrid-inverter',
-      name: 'EnerTech SunMax Hybrid (5kVA - 50kVA)',
-      categoryId: 'cat-solar',
-      modelCode: 'ET-SM-HYB',
-      summary: 'Bi-directional solar hybrid inverter with intelligent grid synchronization.',
-      description: 'Seamless integration of solar photovoltaic generation, grid power, and battery storage. Zero changeover time ensures uninterrupted power.',
-      applications: ['Rooftop Solar for Commercial Buildings', 'Petrol Pumps', 'Institutions', 'Telecom Towers'],
-      features: ['Dual MPPT Tracking', 'Zero Export Control Support', 'Generator Compatible', 'Remote cloud monitoring'],
-      specifications: {'Capacity Range': '5kVA - 50kVA', 'MPPT Efficiency': '99.2%', 'Battery Support': 'Lead Acid & LiFePO4', 'Changeover Time': '< 5ms'},
-    ),
-    ProductDetails(
-      id: 'prod-powervault-bess',
-      slug: 'powervault-bess',
-      name: 'EnerTech PowerVault BESS (20kWh - 500kWh)',
-      categoryId: 'cat-bess',
-      modelCode: 'ET-PV-BESS',
-      summary: 'Modular LiFePO4 Battery Energy Storage System with BMS.',
-      description: 'Industrial-grade energy storage designed for peak shaving, demand response, and backup power during grid failures.',
-      applications: ['Microgrids', 'Renewable Energy Integration', 'Industrial Peak Shaving', 'EV Fast Charging Hubs'],
-      features: ['Automated thermal management', 'Modular slide-in rack architecture', '> 6000 cycles lifecycle', 'Tier-1 LFP cells with multi-stage BMS'],
-      specifications: {'Cell Chemistry': 'Lithium Iron Phosphate (LiFePO4)', 'Depth of Discharge': '90%', 'Communication': 'CAN / RS485 / Modbus', 'Design Life': '> 15 Years'},
-    ),
-    ProductDetails(
-      id: 'prod-puresine-ahf',
-      slug: 'puresine-ahf',
-      name: 'EnerTech PureSine AHF-300',
-      categoryId: 'cat-ahf',
-      modelCode: 'ET-PS-AHF',
-      summary: '3-Level topology active harmonic filter and power factor stabilizer.',
-      description: 'Mitigates harmonics up to the 50th order, balances 3-phase unbalanced loads, and achieves near-unity power factor dynamically.',
-      applications: ['Steel & Rolling Mills', 'Textile Plants', 'IT Parks', 'Heavy Machinery Facilities'],
-      features: ['Dynamic response in < 5ms', 'Mitigates 2nd to 50th harmonics', 'Selectable compensation modes', 'Modular rack-mountable design'],
-      specifications: {'Compensation Range': '50A to 600A modular', 'Target THDi': '< 3%', 'Efficiency': '> 97.5%', 'Response Time': '< 5ms'},
-    ),
-  ];
+  static const String _categoriesCacheKey = 'enertech_cached_categories_v1';
+  static const String _productsCacheKey = 'enertech_cached_products_v1';
 
   Future<List<ProductCategory>> getCategories() async {
+    // 1. Try local cache first for instant opening
+    List<ProductCategory> cached = [];
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_categoriesCacheKey);
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          cached = decoded.map((row) => ProductCategory.fromJson(row as Map<String, dynamic>)).toList();
+        }
+      }
+    } catch (_) {}
+
+    // 2. Fetch fresh categories from backend API
     try {
       final json = await _getJson('/catalogue/categories');
       if (json is List<dynamic> && json.isNotEmpty) {
-        return json.map((row) => ProductCategory.fromJson(row as Map<String, dynamic>)).toList(growable: false);
+        final fresh = json.map((row) => ProductCategory.fromJson(row as Map<String, dynamic>)).toList(growable: false);
+        // Save to cache asynchronously
+        unawaited(SharedPreferences.getInstance().then((p) => p.setString(_categoriesCacheKey, jsonEncode(json))));
+        return fresh;
       }
     } catch (e) {
-      debugPrint('CatalogueRepository.getCategories network note: $e, using fallback data.');
+      debugPrint('CatalogueRepository.getCategories network note: $e');
     }
-    return _fallbackCategories;
+
+    return cached;
   }
 
   Future<ProductPageData> getProducts({String query = '', String? category, int limit = 24, int offset = 0}) async {
+    // 1. Try local cache first for instant display
+    List<ProductSummary> cachedProducts = [];
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_productsCacheKey);
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          cachedProducts = ProductPageData.fromJson(decoded).items;
+        }
+      }
+    } catch (_) {}
+
+    // 2. Fetch fresh products from backend API
     try {
       final json = await _getJson('/catalogue/products', queryParameters: {
         'limit': '$limit',
@@ -121,18 +78,23 @@ class CatalogueRepository {
         if (category != null && category.isNotEmpty) 'category': category,
       });
       if (json is Map<String, dynamic>) {
-        final data = ProductPageData.fromJson(json);
-        if (data.items.isNotEmpty) return data;
+        final freshData = ProductPageData.fromJson(json);
+        if (freshData.items.isNotEmpty) {
+          // Cache whole catalogue when query is empty
+          if (query.trim().isEmpty && (category == null || category.isEmpty)) {
+            unawaited(SharedPreferences.getInstance().then((p) => p.setString(_productsCacheKey, jsonEncode(json))));
+          }
+          return freshData;
+        }
       }
     } catch (e) {
-      debugPrint('CatalogueRepository.getProducts network note: $e, using fallback data.');
+      debugPrint('CatalogueRepository.getProducts network note: $e');
     }
 
-    // Filter fallback products
-    var filtered = _fallbackProducts.where((p) {
-      if (category != null && category.isNotEmpty) {
-        final cat = _fallbackCategories.where((c) => c.slug == category || c.id == category).firstOrNull;
-        if (cat != null && p.categoryId != cat.id) return false;
+    // 3. If network fails or empty, filter cached real products
+    var filtered = cachedProducts.where((p) {
+      if (category != null && category.isNotEmpty && p.categoryId != category) {
+        return false;
       }
       if (query.trim().isNotEmpty) {
         final q = query.trim().toLowerCase();
@@ -157,13 +119,10 @@ class CatalogueRepository {
         return ProductDetails.fromJson(json);
       }
     } catch (e) {
-      debugPrint('CatalogueRepository.getProduct network note: $e, using fallback.');
+      debugPrint('CatalogueRepository.getProduct network note: $e');
     }
 
-    final found = _fallbackProducts.where((p) => p.slug == slug || p.id == slug).firstOrNull;
-    if (found != null) return found;
-
-    throw const CatalogueException('Product could not be found.');
+    throw const CatalogueException('Product could not be loaded from server.');
   }
 
   Future<dynamic> _getJson(String path, {Map<String, String>? queryParameters}) async {
