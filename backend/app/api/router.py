@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -54,12 +56,21 @@ def list_products(
     session: Session = Depends(get_session),
     q: str | None = Query(default=None, min_length=1, max_length=120),
     category: str | None = Query(default=None, min_length=1, max_length=120),
+    ids: str | None = Query(default=None, min_length=36, max_length=443),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> ProductPage:
     require_database()
     filters = [Product.is_published.is_(True), ProductCategory.is_published.is_(True)]
     statement = select(Product).join(Product.category)
+    if ids is not None:
+        try:
+            selected_ids = [UUID(value.strip()) for value in ids.split(",")]
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="Product IDs must be valid UUIDs") from error
+        if not selected_ids or len(selected_ids) > 12:
+            raise HTTPException(status_code=422, detail="Choose between 1 and 12 product IDs")
+        filters.append(Product.id.in_(selected_ids))
     if category:
         filters.append(ProductCategory.slug == category)
     if q:
@@ -83,3 +94,4 @@ def get_product(slug: str, session: Session = Depends(get_session)) -> Product:
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     return product
+
