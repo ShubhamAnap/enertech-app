@@ -914,7 +914,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                 </td>
                                 <td className="text-right">
                                   <div className="flex items-center justify-end gap-1">
-                                    {pdfUrl && (
+                                    {pdfDoc && (
                                       <a
                                         href={pdfDoc.url}
                                         target="_blank"
@@ -1013,9 +1013,9 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                   </div>
 
                                   <div className="flex items-center gap-1.5 pt-3 mt-3 border-t border-base-200">
-                                    {pdfUrl && (
+                                    {pdfDoc && (
                                       <a
-                                        href={pdfUrl}
+                                        href={pdfDoc.url}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="btn btn-sm btn-outline gap-1 h-10 min-h-10 px-2 font-medium border-base-300 hover:bg-base-200"
