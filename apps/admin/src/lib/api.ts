@@ -15,15 +15,15 @@ export type AdminMediaAsset = { url: string; path: string; bucket: string; conte
 
 export function getEffectiveApiBaseUrl(): string {
   if (typeof window !== "undefined") {
-    const custom = localStorage.getItem("enertech_cms_api_url");
-    if (custom?.trim()) return custom.trim().replace(/\/$/, "");
-
     const host = window.location.hostname;
     const isLocalhost = host === "localhost" || host === "127.0.0.1";
+    // In production, send browser requests through the same-origin Next.js
+    // rewrite. This avoids CORS and API-certificate mismatches in browsers;
+    // the CMS server forwards the request over Coolify's private network.
+    if (!isLocalhost) return `${window.location.origin}/backend-api/api/v1`;
+
     const envUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "");
-    if (!isLocalhost && (!envUrl || envUrl.includes("localhost") || envUrl.includes("127.0.0.1"))) {
-      return `${window.location.origin}/backend-api/api/v1`;
-    }
+    if (envUrl) return envUrl;
   }
   return process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "http://127.0.0.1:8000/api/v1";
 }
@@ -63,3 +63,4 @@ export async function uploadMedia(user: User, file: File): Promise<AdminMediaAss
   if (!response.ok) throw await responseError(response);
   return response.json() as Promise<AdminMediaAsset>;
 }
+
