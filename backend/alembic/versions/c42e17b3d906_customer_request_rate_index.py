@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from typing import Union
 
 from alembic import op
+import sqlalchemy as sa
 
 
 revision: str = "c42e17b3d906"
@@ -17,12 +18,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_index(
-        "ix_customer_requests_customer_created",
-        "customer_requests",
-        ["customer_uid", "created_at"],
-    )
+    bind = op.get_bind()
+    indexes = {
+        index["name"]: index.get("column_names")
+        for index in sa.inspect(bind).get_indexes("customer_requests")
+    }
+    index_name = "ix_customer_requests_customer_created"
+    expected_columns = ["customer_uid", "created_at"]
+    if index_name in indexes:
+        if indexes[index_name] != expected_columns:
+            raise RuntimeError(f"Existing index {index_name} does not match the expected columns.")
+    else:
+        op.create_index(index_name, "customer_requests", expected_columns)
 
 
 def downgrade() -> None:
     op.drop_index("ix_customer_requests_customer_created", table_name="customer_requests")
+
