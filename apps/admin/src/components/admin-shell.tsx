@@ -392,7 +392,10 @@ export default function AdminShell({ user, role }: { user: User; role: string })
       setNotice(`${result.message || "WooCommerce sync complete!"} ${result.created || 0} new, ${result.updated || 0} updated, ${result.documents_linked || 0} PDFs linked.`);
       setWpStatus(`${result.skipped || 0} records skipped; ${result.withdrawn || 0} products withdrawn.`);
       await loadCatalogue();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "WooCommerce sync failed."); }
+    } catch (cause) {
+      setNotice("");
+      setError(cause instanceof Error ? cause.message : "WooCommerce sync failed.");
+    }
   }
 
   async function updateCustomerRequest(record: CustomerRequest, nextStatus: string, assignedTo: string) {
@@ -1851,5 +1854,7 @@ function ContentField({ field, value, categories, products, onChange }: { field:
   if (choices[field]) return <label className="form-control gap-1"><span className="label-text font-semibold">{humanize(field)}</span><select className="select select-bordered" value={String(value)} onChange={(event) => onChange(event.target.value)}>{choices[field].map((choice) => <option key={choice} value={choice}>{humanize(choice)}</option>)}</select></label>;
   if (field === "logo_url" || field === "support_icon_url") return <label className="form-control gap-2"><span className="label-text font-semibold">{humanize(field)}</span><input className="input input-bordered" type="url" value={textValue(value)} onChange={(event) => onChange(event.target.value)} /><input className="file-input file-input-bordered file-input-sm w-full" type="file" accept="image/png,image/jpeg,image/webp" aria-label={`Upload ${humanize(field)}`} disabled={uploading} onChange={async (event) => { const file = event.target.files?.[0]; const authUser = getFirebaseAuth()?.currentUser; if (!file || !authUser) return; setUploading(true); setUploadError(""); try { const asset = await uploadMedia(authUser, file); onChange(asset.url); } catch (cause) { setUploadError(cause instanceof Error ? cause.message : "Image upload failed."); } finally { setUploading(false); event.target.value = ""; } }} />{uploading && <span className="label-text-alt">Uploading to Supabase Storage…</span>}{uploadError && <span role="alert" className="text-xs text-error">{uploadError}</span>}</label>;
   const long = ["description", "body", "message", "address", "hours"].some((part) => field.includes(part));
-  return <label className={`form-control gap-1 ${long ? "sm:col-span-2" : ""}`}><span className="label-text font-semibold">{humanize(field)}</span>{long ? <textarea className="textarea textarea-bordered min-h-20" value={textValue(value)} onChange={(event) => onChange(event.target.value)} /> : <input className="input input-bordered" type={field.includes("email") ? "email" : field.includes("url") || field.includes("logo") || field.includes("handoff") ? "url" : "text"} value={textValue(value)} onChange={(event) => onChange(event.target.value)} />}</label>;
+  const inputType = field.includes("email") ? "email" : field.includes("phone") || field.includes("whatsapp") ? "tel" : field.includes("url") || field.includes("logo") || field.includes("handoff") ? "url" : "text";
+  const inputId = `content-${field}`;
+  return <div className={`min-w-0 ${long ? "sm:col-span-2" : ""}`}><label className="mb-1 block text-sm font-semibold" htmlFor={inputId}>{humanize(field)}</label>{long ? <textarea id={inputId} className="textarea textarea-bordered min-h-20 w-full" value={textValue(value)} onChange={(event) => onChange(event.target.value)} /> : <input id={inputId} className="input input-bordered w-full" type={inputType} value={textValue(value)} onChange={(event) => onChange(event.target.value)} />}</div>;
 }
