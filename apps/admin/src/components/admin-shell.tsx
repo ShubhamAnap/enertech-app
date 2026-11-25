@@ -7,6 +7,7 @@ import { api, uploadMedia, type AdminAccount, type AuditEvent, type Category, ty
 import { getFirebaseAuth } from "@/lib/firebase";
 
 type Section = "overview" | "products" | "categories" | "home" | "contacts" | "solution_finder" | "chat" | "brand" | "wordpress" | "service" | "quotes" | "contact_inquiries" | "knowledge" | "customers" | "admins" | "audit";
+type WordPressStatus = { configured: boolean; authenticated: boolean; documents_configured: boolean; site: string | null; products_path: string | null; categories_path: string | null; store_api_path: string | null; message: string };
 const sectionNames: Record<Section, string> = { overview: "Overview", products: "Products", categories: "Collections", home: "Home screen", contacts: "Contact details", solution_finder: "Solution Finder", chat: "Chat support", brand: "App branding", wordpress: "WordPress import", service: "Service requests", quotes: "Quote enquiries", contact_inquiries: "Contact enquiries", knowledge: "FAQs & knowledge", customers: "Customers", admins: "Admin access", audit: "Audit history" };
 const contentSections: { key: Section; title: string }[] = [{ key: "home", title: "Home screen" }, { key: "contacts", title: "Contact details" }, { key: "solution_finder", title: "Solution Finder" }, { key: "chat", title: "Chat support" }, { key: "brand", title: "App branding" }, { key: "knowledge", title: "FAQs & knowledge" }];
 const emptyCategory = { slug: "", name: "", description: "", sort_order: 0, image_url: null as string | null, wordpress_source_id: null as string | null };
@@ -95,6 +96,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [showKnowledgeForm, setShowKnowledgeForm] = useState(false);
   const [wpPreview, setWpPreview] = useState<Array<Record<string, unknown>>>([]);
   const [wpStatus, setWpStatus] = useState<string>("");
+  const [wpConnection, setWpConnection] = useState<WordPressStatus | null>(null);
+  const [wpConnectionLoading, setWpConnectionLoading] = useState(false);
   const [customerRequests, setCustomerRequests] = useState<CustomerRequest[]>([]);
   const [assignableStaff, setAssignableStaff] = useState<AdminAccount[]>([]);
   const [requestsHasMore, setRequestsHasMore] = useState(false);
@@ -113,6 +116,19 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [inquiryHasMore, setInquiryHasMore] = useState(false);
   const catalogueRequestId = useRef(0);
   const title = sectionNames[section];
+  const wpSyncReady = Boolean(wpConnection?.configured && wpConnection.authenticated);
+
+  const loadWordPressStatus = useCallback(async () => {
+    setWpConnectionLoading(true);
+    try {
+      const status = await api<WordPressStatus>(user, "/admin/integrations/wordpress/status");
+      setWpConnection(status);
+    } catch {
+      setWpConnection(null);
+    } finally {
+      setWpConnectionLoading(false);
+    }
+  }, [user]);
 
   const loadCatalogue = useCallback(async (productOffset = 0, categoryOffset = 0, append = false, searchTerm = query) => {
     const requestId = ++catalogueRequestId.current;
@@ -240,6 +256,10 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     const timer = window.setTimeout(() => { if (section === "products" || section === "categories" || section === "overview") void loadCatalogue(); }, 0);
     return () => window.clearTimeout(timer);
   }, [section, loadCatalogue]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { if (section === "wordpress") void loadWordPressStatus(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [section, loadWordPressStatus]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
       if (["home", "contacts", "solution_finder", "chat", "brand"].includes(section)) {
@@ -380,7 +400,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
 
   async function wordpressPreview() {
     setWpStatus(""); setError("");
-    try { const result = await api<{ items: Array<Record<string, unknown>>; message?: string }>(user, "/admin/integrations/wordpress/products?limit=20"); setWpPreview(result.items); setWpStatus(result.message ?? `${result.items.length} WordPress products found. Imported records remain drafts.`); }
+    try { const result = await api<{ items: Array<Record<string, unknown>>; message?: string }>(user, "/admin/integrations/wordpress/products?limit=20"); setWpPreview(result.items); setWpStatus(result.message ?? `${result.items.length} WordPress products found. Imported records remain drafts.`); await loadWordPressStatus(); }
     catch (cause) { setWpStatus(cause instanceof Error ? cause.message : "WordPress connection is not configured."); }
   }
 
@@ -392,9 +412,11 @@ export default function AdminShell({ user, role }: { user: User; role: string })
       setNotice(`${result.message || "WooCommerce sync complete!"} ${result.created || 0} new, ${result.updated || 0} updated, ${result.documents_linked || 0} PDFs linked.`);
       setWpStatus(`${result.skipped || 0} records skipped; ${result.withdrawn || 0} products withdrawn.`);
       await loadCatalogue();
+      await loadWordPressStatus();
     } catch (cause) {
       setNotice("");
       setError(cause instanceof Error ? cause.message : "WooCommerce sync failed.");
+      await loadWordPressStatus();
     }
   }
 
@@ -1454,8 +1476,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                     <p>Pull published WooCommerce products and collections when server credentials and route mappings are configured.</p>
                   </div>
                   <div className="page-actions">
-                    <button className="btn btn-outline" onClick={() => void wordpressPreview()}>Preview Source</button>
-                    <button className="btn btn-primary" onClick={() => void wordpressSync()}>Sync Catalogue Now</button>
+                    <button className="btn btn-outline" disabled={wpConnectionLoading} onClick={() => void wordpressPreview()}>Preview Source</button>
+                    <button className="btn btn-primary" disabled={wpConnectionLoading || !wpSyncReady} onClick={() => void wordpressSync()}>Sync Catalogue Now</button>
                   </div>
                 </div>
                 <div className="card panel">
@@ -1466,9 +1488,19 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                     </div>
                   </header>
                   <div className="p-5">
-                    <div className="alert alert-info text-sm mb-4">
-                      WooCommerce is the authoritative product catalogue source. Sync extracts all equipment, images, specs, and PDF datasheets into the platform database.
+                    <div className={`alert text-sm mb-4 ${wpSyncReady ? "alert-success" : "alert-warning"}`} role="status">
+                      <div>
+                        <strong>{wpConnectionLoading ? "Checking WooCommerce settings…" : wpSyncReady ? "WooCommerce settings are present" : "WooCommerce sync is not ready"}</strong>
+                        <p className="mt-1">{wpConnection?.message ?? "The API connection could not be checked. Refresh this page or check the API deployment."}</p>
+                        {wpConnection?.site && <p className="mt-1 break-all">Source: {wpConnection.site}</p>}
+                        {wpSyncReady && <p className="mt-1">Settings are present. Use Preview Source to confirm that the live WordPress endpoints and credentials work.</p>}
+                        {!wpSyncReady && !wpConnectionLoading && <p className="mt-1">In Coolify → API environment variables, set <code>WORDPRESS_API_BASE_URL</code>, <code>WORDPRESS_CONSUMER_KEY</code>, and <code>WORDPRESS_CONSUMER_SECRET</code>. The URL must be your WordPress source followed by <code>/wp-json</code>. Keep the key and secret in Coolify; do not paste them in CMS or chat.</p>}
+                      </div>
                     </div>
+                    <div className="alert alert-info text-sm mb-4">
+                      WooCommerce is the source for products and categories. A successful sync updates the app catalogue, images, specifications, stock, prices, and linked PDF documents.
+                    </div>
+                    <button className="btn btn-outline btn-sm mb-3" disabled={wpConnectionLoading} onClick={() => void loadWordPressStatus()}>Refresh connection status</button>
                     {wpStatus && <p className="mt-2 text-sm font-semibold" role="status">{wpStatus}</p>}
                     {wpPreview.length > 0 && (
                       <div className="mt-4 overflow-x-auto">
