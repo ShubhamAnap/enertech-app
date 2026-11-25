@@ -252,17 +252,26 @@ def _https_url(value: Any) -> str | None:
     return value[:1000]
 
 
-def _documents(product: dict[str, Any], media: list[dict[str, Any]]) -> list[dict[str, str]]:
+def _documents(product: dict[str, Any], media: list[dict[str, Any]], field_path: str = "") -> list[dict[str, str]]:
     source_id = str(product.get("id", ""))
     found: dict[str, str] = {}
+    candidates: list[Any] = []
     downloads = product.get("downloads")
     if isinstance(downloads, list):
-        for item in downloads:
-            if not isinstance(item, dict):
-                continue
-            url = _https_url(item.get("file"))
-            if url and url.lower().split("?", 1)[0].endswith(".pdf"):
-                found[url] = _plain(item.get("name") or "Product brochure", 180) or "Product brochure"
+        candidates.extend(downloads)
+    if field_path.strip():
+        mapped = _field(product, field_path.strip())
+        candidates.extend(mapped if isinstance(mapped, list) else [mapped])
+    for item in candidates:
+        if isinstance(item, str):
+            url, title = _https_url(item), "Product datasheet"
+        elif isinstance(item, dict):
+            url = _https_url(item.get("url") or item.get("file") or item.get("source_url"))
+            title = _plain(item.get("title") or item.get("name") or item.get("label") or "Product datasheet", 180)
+        else:
+            continue
+        if url and (url.lower().split("?", 1)[0].endswith(".pdf") or "pdf" in title.lower() or "datasheet" in title.lower()):
+            found[url] = title or "Product datasheet"
     for item in media:
         if str(item.get("post")) != source_id:
             continue
@@ -411,7 +420,7 @@ def sync_woocommerce_catalogue(
             quantity = int(quantity) if quantity is not None and int(quantity) >= 0 else None
         except (TypeError, ValueError):
             quantity = None
-        documents = _documents(source, source_media)
+        documents = _documents(source, source_media, getattr(settings, "wordpress_source_documents_field", ""))
         values = {
             "category_id": str(selected_category.id), "slug": slug, "name": title,
             "model_code": sku, "summary": summary, "description": description,
@@ -483,7 +492,7 @@ def sync_woocommerce_catalogue(
         "skipped": skipped,
         "withdrawn": withdrawn,
         "categories": category_rows,
-        "documents_linked": sum(len(_documents(row, source_media)) for row in source_products),
+        "documents_linked": sum(len(_documents(row, source_media, getattr(settings, "wordpress_source_documents_field", ""))) for row in source_products),
         "message": f"Synced {created + updated} WooCommerce products to the app catalogue.",
     }
 

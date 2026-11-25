@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     wordpress_source_applications_field: str = ""
     wordpress_source_features_field: str = ""
     wordpress_source_specifications_field: str = "attributes"
+    wordpress_source_documents_field: str = ""
     chat_allowed_hosts: str = ""
     chat_widget_script_url: str = ""
     # This value is sent to the customer app, so only a provider's public
