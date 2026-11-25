@@ -188,7 +188,9 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
             msg.contains('hash') ||
             msg.contains('fingerprint');
         setState(() {
-          _error = _authMessage(error);
+          _error = isHashError
+              ? 'Google sign-in could not verify this build’s signing certificate. Register its release SHA-1 in Firebase, refresh the Android Firebase config, and install a build made with that config.'
+              : _authMessage(error);
           _showShaNotice = isHashError;
         });
       }
@@ -202,7 +204,7 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
             errStr.contains('sign_in_failed');
         setState(() {
           _error = isHashError
-              ? 'Google Sign-In needs this app’s SHA-1 certificate fingerprint registered in Firebase Console.'
+              ? 'Google sign-in could not verify this build’s signing certificate. Register its release SHA-1 in Firebase, refresh the Android Firebase config, and install a build made with that config.'
               : 'Google sign-in could not be completed ($e). Please use email and password instead.';
           _showShaNotice = isHashError;
         });
@@ -284,7 +286,7 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                 if (_showShaNotice) ...[
                   const SizedBox(height: 12),
                   const NoticeCard(
-                    message: 'Google Sign-In needs a SHA-1 fingerprint for this build registered in Firebase. Ask the release administrator to add the matching signing certificate in Firebase Console.',
+                    message: 'In Firebase Console, open Project settings → General → Your apps → this Android app → SHA certificate fingerprints. Add the release APK’s SHA-1, save, download the refreshed google-services.json, then rebuild and install the APK.',
                   ),
                 ],
 

@@ -13,10 +13,28 @@ Future<void> main() async {
   }
 
   final environment = dotenv.isInitialized ? dotenv.env : const <String, String>{};
-  final apiKey = environment['FIREBASE_API_KEY']?.trim() ?? '';
-  final appId = environment['FIREBASE_APP_ID']?.trim() ?? '';
-  final projectId = environment['FIREBASE_PROJECT_ID']?.trim() ?? '';
-  final senderId = environment['FIREBASE_MESSAGING_SENDER_ID']?.trim() ?? '';
+  String configuredValue(String key, String compiledValue) {
+    final compiled = compiledValue.trim();
+    if (compiled.isNotEmpty) return compiled;
+    return environment[key]?.trim() ?? '';
+  }
+
+  final apiKey = configuredValue(
+    'FIREBASE_API_KEY',
+    const String.fromEnvironment('FIREBASE_API_KEY'),
+  );
+  final appId = configuredValue(
+    'FIREBASE_APP_ID',
+    const String.fromEnvironment('FIREBASE_APP_ID'),
+  );
+  final projectId = configuredValue(
+    'FIREBASE_PROJECT_ID',
+    const String.fromEnvironment('FIREBASE_PROJECT_ID'),
+  );
+  final senderId = configuredValue(
+    'FIREBASE_MESSAGING_SENDER_ID',
+    const String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID'),
+  );
 
   if ([apiKey, appId, projectId, senderId].every((value) => value.isNotEmpty)) {
     try {
