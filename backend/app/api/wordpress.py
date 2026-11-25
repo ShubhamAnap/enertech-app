@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from html import unescape
 from html.parser import HTMLParser
 import json
 import logging
@@ -64,10 +65,19 @@ def _field(record: dict[str, Any], path: str, default: Any = None) -> Any:
 def _plain(value: Any, limit: int = 500, *, preserve_blocks: bool = False) -> str:
     parser = _TextOnly(preserve_blocks=preserve_blocks)
     parser.feed(str(value or ""))
+    text = "".join(parser.parts) if preserve_blocks else " ".join(parser.parts)
+    # Some WordPress fields arrive with their HTML entities encoded twice.
+    # HTMLParser decodes one layer; finish decoding nested entities so they do
+    # not appear verbatim in the mobile app as &lt; or &amp;.
+    for _ in range(3):
+        decoded = unescape(text)
+        if decoded == text:
+            break
+        text = decoded
     if preserve_blocks:
-        lines = [" ".join(line.split()) for line in "".join(parser.parts).splitlines()]
+        lines = [" ".join(line.split()) for line in text.splitlines()]
         return "\n".join(line for line in lines if line)[:limit]
-    return " ".join(" ".join(parser.parts).split())[:limit]
+    return " ".join(text.split())[:limit]
 
 
 def _string_list(value: Any, limit: int = 32) -> list[str]:
