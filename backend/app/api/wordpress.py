@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from html.parser import HTMLParser
 import json
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -18,6 +19,7 @@ from app.db.session import get_session
 from app.models import AuditEvent, Product, ProductCategory
 
 router = APIRouter(prefix="/admin/integrations/wordpress", tags=["wordpress integration"])
+logger = logging.getLogger(__name__)
 ROLES = ("content_editor", "admin", "super_admin")
 
 
@@ -27,9 +29,20 @@ class WordPressImport(BaseModel):
 
 
 class _TextOnly(HTMLParser):
-    def __init__(self) -> None:
+    _BLOCK_TAGS = {"address", "article", "blockquote", "br", "dd", "div", "dl", "dt", "figcaption", "figure", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li", "ol", "p", "section", "table", "td", "th", "tr", "ul"}
+
+    def __init__(self, *, preserve_blocks: bool = False) -> None:
         super().__init__()
         self.parts: list[str] = []
+        self.preserve_blocks = preserve_blocks
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.preserve_blocks and tag in self._BLOCK_TAGS:
+            self.parts.append("\n• " if tag == "li" else "\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.preserve_blocks and tag in self._BLOCK_TAGS:
+            self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
         self.parts.append(data)
@@ -48,9 +61,12 @@ def _field(record: dict[str, Any], path: str, default: Any = None) -> Any:
     return default if value is None else value
 
 
-def _plain(value: Any, limit: int = 500) -> str:
-    parser = _TextOnly()
+def _plain(value: Any, limit: int = 500, *, preserve_blocks: bool = False) -> str:
+    parser = _TextOnly(preserve_blocks=preserve_blocks)
     parser.feed(str(value or ""))
+    if preserve_blocks:
+        lines = [" ".join(line.split()) for line in "".join(parser.parts).splitlines()]
+        return "\n".join(line for line in lines if line)[:limit]
     return " ".join(" ".join(parser.parts).split())[:limit]
 
 
@@ -356,7 +372,7 @@ def sync_woocommerce_catalogue(
         product = session.scalar(select(Product).where(Product.wordpress_source_id == wp_id))
         slug = _slug_for_product(session, slug, wp_id, product)
         summary = _plain(_field(source, settings.wordpress_source_summary_field, source.get("short_description", "")), 500) or None
-        description = _plain(_field(source, settings.wordpress_source_description_field, source.get("description", "")), 12000) or None
+        description = _plain(_field(source, settings.wordpress_source_description_field, source.get("description", "")), 12000, preserve_blocks=True) or None
         sku = _plain(_field(source, settings.wordpress_source_model_field, source.get("sku", "")), 120) or None
         images = source.get("images") if isinstance(source.get("images"), list) else store.get("images", [])
         image_url = _image_url(_field(source, settings.wordpress_source_image_field)) or (_image_url(_field(store, "images.0")))
@@ -444,10 +460,12 @@ def sync_woocommerce_catalogue(
         session.commit()
     except IntegrityError as error:
         session.rollback()
-        raise HTTPException(status_code=409, detail=f"Duplicate slug or constraint during sync: {error}") from error
+        logger.exception("WooCommerce catalogue sync hit a database constraint")
+        raise HTTPException(status_code=409, detail="WooCommerce sync could not be saved because of a catalogue conflict. Check for duplicate product or collection slugs.") from error
     except Exception as error:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Database commit error during sync: {error}") from error
+        logger.exception("WooCommerce catalogue sync could not commit")
+        raise HTTPException(status_code=500, detail="WooCommerce sync could not be saved. Check API runtime logs and try again.") from error
     return {
         "source": "woocommerce",
         "created": created,
@@ -505,7 +523,7 @@ def import_wordpress_product(
         raise HTTPException(status_code=422, detail="WordPress title or slug is not valid for the catalogue")
     summary = _plain(_field(source, settings.wordpress_source_summary_field, source.get("excerpt", "")))
     model = _plain(_field(source, settings.wordpress_source_model_field, ""), 120)
-    description = _plain(_field(source, settings.wordpress_source_description_field, ""), 12000)
+    description = _plain(_field(source, settings.wordpress_source_description_field, ""), 12000, preserve_blocks=True)
     image_url = _image_url(_field(source, settings.wordpress_source_image_field))
     gallery = _field(source, settings.wordpress_source_gallery_field, [])
     gallery_images = list(dict.fromkeys(url for item in (gallery if isinstance(gallery, list) else []) if (url := _image_url(item)) and url != image_url))[:16]
