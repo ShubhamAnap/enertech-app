@@ -1,8 +1,8 @@
-import 'package:intl/intl.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../data/catalogue_models.dart';
 import '../data/catalogue_repository.dart';
+import '../data/product_formatters.dart';
 import '../data/product_selection_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
@@ -317,17 +317,11 @@ class _ProductCompareScreenState extends State<ProductCompareScreen> {
 
   String _price(ProductSummary product) {
     if (product.priceMinor == null) return 'Contact for pricing';
-    final digits = product.currencyMinorUnit.clamp(0, 4);
-    final divisor = int.parse('1${'0' * digits}');
-    final symbol = product.currencyCode == 'INR'
-        ? '₹'
-        : '${product.currencyCode} ';
-    return NumberFormat.currency(
-      locale: 'en_IN',
-      name: product.currencyCode,
-      symbol: symbol,
-      decimalDigits: digits,
-    ).format(product.priceMinor! / divisor);
+    return formatProductPrice(
+      priceMinor: product.priceMinor!,
+      currencyMinorUnit: product.currencyMinorUnit,
+      currencyCode: product.currencyCode,
+    );
   }
 
   String _stock(String status) => switch (status) {
@@ -350,3 +344,4 @@ class _ComparisonRow {
   final String label;
   final List<String> values;
 }
+
