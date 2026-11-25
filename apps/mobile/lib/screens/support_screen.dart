@@ -83,6 +83,9 @@ class SupportScreen extends StatelessWidget {
           : const <String, dynamic>{};
       final supportPhone = contacts['support_phone'] as String? ?? '';
       final salesPhone = contacts['sales_phone'] as String? ?? '';
+      final callPhone = supportPhone.trim().isNotEmpty
+          ? supportPhone
+          : salesPhone;
       final whatsapp = contacts['whatsapp_number'] as String? ?? '';
       final supportEmail = contacts['support_email'] as String? ?? '';
       final salesEmail = contacts['sales_email'] as String? ?? '';
@@ -144,7 +147,7 @@ class SupportScreen extends StatelessWidget {
                       ? 'Chat with EnerTech support or connect with our technical team.'
                       : availability.isNotEmpty
                       ? availability
-                      : 'AI guidance and direct support will be available when verified knowledge and official channels are connected.',
+                      : 'Live chat is not enabled yet. You can still submit a service request or enquiry and read published support answers below.',
                   style: const TextStyle(
                     color: Color(0xFFD3E0EC),
                     fontSize: 12,
@@ -169,7 +172,7 @@ class SupportScreen extends StatelessWidget {
                     label: Text(
                       chatAvailable
                           ? 'Start support chat'
-                          : 'Open EnerBot support',
+                          : 'View support options',
                     ),
                   ),
                 ),
@@ -190,20 +193,16 @@ class SupportScreen extends StatelessWidget {
               _ContactCard(
                 icon: Icons.call_outlined,
                 title: 'Call support',
-                detail: supportPhone.isEmpty
-                    ? 'Number not configured'
-                    : supportPhone,
-                onTap: () => _openContact(
-                  context,
-                  supportPhone.isEmpty ? salesPhone : supportPhone,
-                  'Call support',
-                ),
+                detail: callPhone.trim().isEmpty
+                    ? 'Add a phone number in CMS'
+                    : callPhone,
+                onTap: () => _openContact(context, callPhone, 'Call support'),
               ),
               _ContactCard(
                 icon: Icons.chat_outlined,
                 title: 'WhatsApp',
                 detail: whatsapp.isEmpty
-                    ? 'Official account not set'
+                    ? 'Add the official number in CMS'
                     : whatsapp,
                 onTap: () => _openContact(context, whatsapp, 'WhatsApp'),
               ),
@@ -211,7 +210,7 @@ class SupportScreen extends StatelessWidget {
                 icon: Icons.mail_outline_rounded,
                 title: 'Email support',
                 detail: supportEmail.isEmpty
-                    ? 'Address not configured'
+                    ? 'Add the support address in CMS'
                     : supportEmail,
                 onTap: () =>
                     _openContact(context, supportEmail, 'Email support'),
@@ -322,7 +321,7 @@ class SupportScreen extends StatelessWidget {
                   faqSnapshot.data ?? const <Map<String, dynamic>>[];
               if (articles.isEmpty)
                 return const NoticeCard(
-                  message: 'Approved support answers will appear here when they are added and published in the CMS.',
+                  message: 'No support answers are published yet. Submit a service request or enquiry to contact the EnerTech team.',
                 );
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -470,3 +469,4 @@ class _SupportRow extends StatelessWidget {
     ),
   );
 }
+
