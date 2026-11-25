@@ -128,7 +128,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [inquiryHasMore, setInquiryHasMore] = useState(false);
   const catalogueRequestId = useRef(0);
   const title = sectionNames[section];
-  const wpSyncReady = Boolean(wpConnection?.configured && wpConnection.authenticated);
+  const wpSyncReady = Boolean(wpConnection?.configured && (wpConnection.authenticated || wpConnection.store_api_path));
 
   const loadWordPressStatus = useCallback(async () => {
     setWpConnectionLoading(true);
@@ -1491,7 +1491,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   <div>
                     <p className="eyebrow">CATALOGUE SOURCE</p>
                     <h1>WooCommerce Sync & Integration</h1>
-                    <p>Pull published WooCommerce products and collections when server credentials and route mappings are configured.</p>
+                    <p>Pull published products from authenticated WooCommerce REST, or use the public Store API when REST keys are unavailable.</p>
                   </div>
                   <div className="page-actions">
                     <button className="btn btn-outline" disabled={wpConnectionLoading} onClick={() => void wordpressPreview()}>Preview Source</button>
@@ -1501,8 +1501,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                 <div className="card panel">
                   <header className="panel-head">
                     <div>
-                      <h2>REST API Connection</h2>
-                      <p>Synchronized via HTTPS REST credentials with image and datasheet extraction.</p>
+                      <h2>WooCommerce Connection</h2>
+                      <p>Uses authenticated REST when configured, with a public Store API fallback and product PDF discovery.</p>
                     </div>
                   </header>
                   <div className="p-5">

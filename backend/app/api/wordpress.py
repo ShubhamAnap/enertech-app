@@ -4,6 +4,7 @@ from html import unescape
 from html.parser import HTMLParser
 import json
 import logging
+import re
 from typing import Any
 from uuid import UUID
 
@@ -158,13 +159,30 @@ def _safe_json(response: httpx.Response) -> Any:
 
 
 def _fetch(limit: int, page: int = 1) -> tuple[list[dict[str, Any]], Any]:
-    client, url, settings = _wordpress_client()
+    settings = get_settings()
+    credentials_ready = bool(
+        (settings.wordpress_consumer_key and settings.wordpress_consumer_secret)
+        or (settings.wordpress_username and settings.wordpress_application_password)
+    )
+    using_store_api = not credentials_ready
+    if using_store_api:
+        if not settings.wordpress_api_base_url or not settings.wordpress_store_products_path:
+            raise HTTPException(status_code=503, detail="Configure WooCommerce REST credentials or the public Store API route")
+        if not settings.wordpress_api_base_url.startswith("https://") and settings.app_env != "local":
+            raise HTTPException(status_code=503, detail="WordPress must use HTTPS outside local development")
+        client = httpx.Client(timeout=15, follow_redirects=False)
+        url = f"{settings.wordpress_api_base_url.rstrip('/')}/{settings.wordpress_store_products_path.strip('/')}"
+    else:
+        client, url, settings = _wordpress_client()
     try:
-        response = client.get(url, params={"per_page": limit, "page": page, "status": "publish"}, headers={"Accept": "application/json"})
+        params = {"per_page": limit, "page": page}
+        if not using_store_api:
+            params["status"] = "publish"
+        response = client.get(url, params=params, headers={"Accept": "application/json"})
         if response.status_code in (401, 403):
-            raise HTTPException(status_code=502, detail="WordPress rejected the configured REST API credentials")
+            raise HTTPException(status_code=502, detail="WordPress rejected the configured REST API credentials or endpoint access")
         if response.status_code == 404:
-            raise HTTPException(status_code=502, detail="WordPress product REST route was not found; check WORDPRESS_PRODUCTS_PATH")
+            raise HTTPException(status_code=502, detail="WordPress product route was not found; check the configured products or Store API path")
         response.raise_for_status()
         payload = _safe_json(response)
         if not isinstance(payload, list):
@@ -176,7 +194,6 @@ def _fetch(limit: int, page: int = 1) -> tuple[list[dict[str, Any]], Any]:
         raise HTTPException(status_code=502, detail="Could not fetch products from WordPress") from error
     finally:
         client.close()
-
 
 def _configured_rest_url(path: str) -> str:
     base = get_settings().wordpress_api_base_url.rstrip("/")
@@ -255,25 +272,57 @@ def _https_url(value: Any) -> str | None:
 def _documents(product: dict[str, Any], media: list[dict[str, Any]], field_path: str = "") -> list[dict[str, str]]:
     source_id = str(product.get("id", ""))
     found: dict[str, str] = {}
-    candidates: list[Any] = []
+    candidates: list[tuple[Any, str]] = []
     downloads = product.get("downloads")
     if isinstance(downloads, list):
-        candidates.extend(downloads)
+        candidates.extend((item, "Product brochure") for item in downloads)
     if field_path.strip():
         mapped = _field(product, field_path.strip())
-        candidates.extend(mapped if isinstance(mapped, list) else [mapped])
-    for item in candidates:
-        if isinstance(item, str):
-            url, title = _https_url(item), "Product datasheet"
-        elif isinstance(item, dict):
-            url = _https_url(item.get("url") or item.get("file") or item.get("source_url"))
-            title = _plain(item.get("title") or item.get("name") or item.get("label") or "Product datasheet", 180)
-        else:
+        candidates.extend((item, "Product datasheet") for item in (mapped if isinstance(mapped, list) else [mapped]))
+    for field in product.get("meta_data", []) if isinstance(product.get("meta_data"), list) else []:
+        if not isinstance(field, dict):
             continue
-        if url and (url.lower().split("?", 1)[0].endswith(".pdf") or "pdf" in title.lower() or "datasheet" in title.lower()):
-            found[url] = title or "Product datasheet"
+        key = str(field.get("key") or field.get("name") or "")
+        if re.search(r"catalog(?:ue)?|pdf|datasheet|brochure|download", key, re.IGNORECASE):
+            candidates.append((field.get("value"), _plain(key.replace("_", " "), 180) or "Product datasheet"))
+
+    def add_candidate(value: Any, fallback_title: str, depth: int = 0) -> None:
+        if depth > 5 or value is None:
+            return
+        if isinstance(value, list):
+            for nested in value[:24]:
+                add_candidate(nested, fallback_title, depth + 1)
+            return
+        if isinstance(value, dict):
+            title = _plain(value.get("title") or value.get("name") or value.get("label") or fallback_title, 180)
+            for key in ("url", "file", "source_url", "guid"):
+                raw_url = value.get(key)
+                if isinstance(raw_url, str):
+                    add_candidate(raw_url, title, depth + 1)
+            for key, nested in value.items():
+                if key not in {"url", "file", "source_url", "guid", "title", "name", "label"} and isinstance(nested, (dict, list)):
+                    add_candidate(nested, title, depth + 1)
+            return
+        if not isinstance(value, str):
+            return
+        text = unescape(value.strip())
+        direct = _https_url(text)
+        urls = [direct] if direct and direct.lower().split("?", 1)[0].endswith(".pdf") else []
+        urls.extend(re.findall(r"https?://[^\s\"'<>]+?\.pdf(?:\?[^\s\"'<>]*)?", text, flags=re.IGNORECASE))
+        for raw_url in urls:
+            url = _https_url(raw_url.rstrip(".,);]"))
+            if url:
+                found[url] = fallback_title or "Product datasheet"
+
+    for candidate, title in candidates:
+        add_candidate(candidate, title)
+    # Product page builders often store the only datasheet link inside HTML descriptions.
+    for description in (product.get("description"), product.get("short_description")):
+        if isinstance(description, str):
+            add_candidate(description, "Product datasheet")
     for item in media:
-        if str(item.get("post")) != source_id:
+        attachment_parent = item.get("post") if item.get("post") is not None else item.get("parent")
+        if str(attachment_parent) != source_id:
             continue
         mime = str(item.get("mime_type") or "")
         url = _https_url(item.get("source_url"))
@@ -281,7 +330,6 @@ def _documents(product: dict[str, Any], media: list[dict[str, Any]], field_path:
             title = _plain(_field(item, "title.rendered", "Product document"), 180)
             found[url] = title or "Product document"
     return [{"title": title, "url": url} for url, title in list(found.items())[:24]]
-
 
 def _slug_for_product(session: Session, slug: str, source_id: str, existing: Product | None) -> str:
     base = slug or f"wordpress-product-{source_id}"
@@ -297,18 +345,19 @@ def _slug_for_product(session: Session, slug: str, source_id: str, existing: Pro
 def wordpress_status(_admin: AdminIdentity = Depends(require_admin_roles(*ROLES))) -> dict[str, Any]:
     settings = get_settings()
     credentials_ready = bool(settings.wordpress_consumer_key and settings.wordpress_consumer_secret)
-    configured = bool(settings.wordpress_api_base_url and settings.wordpress_products_path and settings.wordpress_categories_path and settings.wordpress_store_products_path)
+    rest_ready = bool(settings.wordpress_api_base_url and credentials_ready and settings.wordpress_products_path and settings.wordpress_categories_path)
+    configured = bool(settings.wordpress_api_base_url and (rest_ready or settings.wordpress_store_products_path))
+    message = "Ready to pull the WooCommerce catalogue using authenticated REST" if rest_ready else "Ready to pull public WooCommerce catalogue data using the Store API" if configured else "Set the WordPress URL and WooCommerce REST or Store API routes"
     return {
         "configured": configured,
         "authenticated": credentials_ready,
-        "documents_configured": bool(settings.wordpress_documents_path),
+        "documents_configured": bool(settings.wordpress_documents_path or settings.wordpress_source_documents_field),
         "site": settings.wordpress_api_base_url or None,
         "products_path": settings.wordpress_products_path or None,
         "categories_path": settings.wordpress_categories_path or None,
         "store_api_path": settings.wordpress_store_products_path or None,
-        "message": "Ready to pull the WooCommerce catalogue" if configured and credentials_ready else "Set the WooCommerce REST routes and server-only consumer key/secret",
+        "message": message,
     }
-
 
 @router.post("/sync")
 def sync_woocommerce_catalogue(
@@ -316,21 +365,33 @@ def sync_woocommerce_catalogue(
     admin: AdminIdentity = Depends(require_admin_roles("content_editor", "admin", "super_admin")),
 ) -> dict[str, Any]:
     settings = get_settings()
-    required = [settings.wordpress_products_path, settings.wordpress_categories_path, settings.wordpress_store_products_path]
-    if not settings.wordpress_api_base_url or not all(required):
-        raise HTTPException(status_code=503, detail="Configure the WordPress URL and WooCommerce product, category, and Store API routes")
-    if not settings.wordpress_consumer_key or not settings.wordpress_consumer_secret:
-        raise HTTPException(status_code=503, detail="Set WORDPRESS_CONSUMER_KEY and WORDPRESS_CONSUMER_SECRET in the API environment")
-
-    # Pull-only sync: the WooCommerce API is the catalog source; app records are upserted here.
-    source_products = _fetch_all(settings.wordpress_products_path, authenticated=True, extra_params={"status": "publish"})
+    if not settings.wordpress_api_base_url:
+        raise HTTPException(status_code=503, detail="Configure WORDPRESS_API_BASE_URL in the API environment")
+    credentials_ready = bool(settings.wordpress_consumer_key and settings.wordpress_consumer_secret)
+    rest_ready = bool(credentials_ready and settings.wordpress_products_path and settings.wordpress_categories_path)
+    if rest_ready:
+        # Authenticated REST is the primary source; Store API responses enrich price, image, and stock data.
+        source_products = _fetch_all(settings.wordpress_products_path, authenticated=True, extra_params={"status": "publish"})
+        source_categories = _fetch_all(settings.wordpress_categories_path, authenticated=True, extra_params={"hide_empty": "false"})
+    elif settings.wordpress_store_products_path:
+        # The public Store API is a read-only fallback when server-side REST keys are unavailable.
+        source_products = _fetch_all(settings.wordpress_store_products_path, authenticated=False)
+        source_categories = []
+    else:
+        raise HTTPException(status_code=503, detail="Configure WooCommerce REST credentials or the public Store API route")
     if not source_products:
         raise HTTPException(status_code=409, detail="WooCommerce returned no products; sync made no changes")
-    source_categories = _fetch_all(settings.wordpress_categories_path, authenticated=True, extra_params={"hide_empty": "false"})
-    store_products = _fetch_all(settings.wordpress_store_products_path, authenticated=False)
+    store_products = _fetch_all(settings.wordpress_store_products_path, authenticated=False) if rest_ready and settings.wordpress_store_products_path else source_products
     store_by_id = {str(row.get("id")): row for row in store_products if row.get("id") is not None}
     source_media = _fetch_all(settings.wordpress_documents_path, authenticated=False, extra_params={"mime_type": "application/pdf"}) if settings.wordpress_documents_path else []
 
+    if not source_categories:
+        discovered: dict[str, dict[str, Any]] = {}
+        for product in source_products:
+            for category in product.get("categories", []) if isinstance(product.get("categories"), list) else []:
+                if isinstance(category, dict) and category.get("id") is not None and category.get("name"):
+                    discovered.setdefault(str(category["id"]), category)
+        source_categories = list(discovered.values())
     categories_by_wp_id: dict[str, ProductCategory] = {}
     category_rows = 0
     for item in source_categories:
@@ -508,13 +569,13 @@ def wordpress_products(
         source_id = _field(row, settings.wordpress_source_id_field, row.get("id"))
         result.append({
             "id": str(source_id),
-            "title": _plain(_field(row, settings.wordpress_source_title_field, row.get("title", "")), 220),
+            "title": _plain(_field(row, settings.wordpress_source_title_field, row.get("title", row.get("name", ""))), 220),
             "slug": str(_field(row, settings.wordpress_source_slug_field, row.get("slug", "")))[:180],
-            "summary": _plain(_field(row, settings.wordpress_source_summary_field, row.get("excerpt", ""))),
-            "model_code": _plain(_field(row, settings.wordpress_source_model_field, ""), 120),
-            "description": _plain(_field(row, settings.wordpress_source_description_field, ""), 500),
-            "image_url": _image_url(_field(row, settings.wordpress_source_image_field)),
-            "link": str(row.get("link", ""))[:1000],
+            "summary": _plain(_field(row, settings.wordpress_source_summary_field, row.get("excerpt", row.get("short_description", "")))),
+            "model_code": _plain(_field(row, settings.wordpress_source_model_field, row.get("sku", "")), 120),
+            "description": _plain(_field(row, settings.wordpress_source_description_field, row.get("description", "")), 500),
+            "image_url": _image_url(_field(row, settings.wordpress_source_image_field)) or _image_url(_field(row, "images.0")),
+            "link": str(row.get("link") or row.get("permalink") or "")[:1000],
         })
     return {"items": result, "message": f"Fetched {len(result)} WordPress records. These are previews; import creates drafts."}
 
