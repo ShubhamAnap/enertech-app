@@ -1,9 +1,9 @@
 import 'package:material_ui/material_ui.dart';
-import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../data/catalogue_models.dart';
 import '../data/catalogue_repository.dart';
+import '../data/product_formatters.dart';
 import '../data/product_selection_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
@@ -31,6 +31,12 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   late Future<ProductDetails> _detail = widget.repository.getProduct(
     widget.product.slug,
   );
+
+  void _retryDetails() {
+    setState(() {
+      _detail = widget.repository.getProduct(widget.product.slug);
+    });
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -209,7 +215,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             if ((product?.description ?? '').isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(
-                product!.description!,
+                formatProductDescription(product!.description!),
                 style: const TextStyle(
                   color: AppColors.muted,
                   fontSize: 13,
@@ -258,6 +264,14 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               const Padding(
                 padding: EdgeInsets.all(16),
                 child: Center(child: CircularProgressIndicator()),
+              )
+            else if (snapshot.hasError && product == null)
+              EmptyState(
+                icon: Icons.wifi_off_rounded,
+                title: 'Specifications unavailable',
+                message: 'Reconnect and retry to load the published technical specifications.',
+                actionLabel: 'Retry',
+                onAction: _retryDetails,
               )
             else if (product == null || product.specifications.isEmpty)
               const Card(
@@ -493,17 +507,11 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       value is List ? value.join(', ') : value?.toString() ?? '—';
 
   String _productPrice(ProductSummary product) {
-    final digits = product.currencyMinorUnit.clamp(0, 4);
-    final divisor = int.parse('1${'0' * digits}');
-    final symbol = product.currencyCode == 'INR'
-        ? '₹'
-        : '${product.currencyCode} ';
-    return NumberFormat.currency(
-      locale: 'en_IN',
-      name: product.currencyCode,
-      symbol: symbol,
-      decimalDigits: digits,
-    ).format(product.priceMinor! / divisor);
+    return formatProductPrice(
+      priceMinor: product.priceMinor!,
+      currencyMinorUnit: product.currencyMinorUnit,
+      currencyCode: product.currencyCode,
+    );
   }
 
   String _stockLabel(String status) => switch (status) {
@@ -513,3 +521,4 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     _ => '',
   };
 }
+

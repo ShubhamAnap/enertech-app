@@ -71,12 +71,10 @@ class _SolutionFinderScreenState extends State<SolutionFinderScreen> {
       );
       return;
     }
-    if (_step == 1 && _loadController.text.trim().isEmpty) {
+    if (_step == 1 && _loadController.text.trim().length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'Describe what you need to keep powered, or enter “Not sure”.',
-          ),
+          content: Text('Describe what needs power, or enter “Not sure”.'),
         ),
       );
       return;
@@ -86,6 +84,29 @@ class _SolutionFinderScreenState extends State<SolutionFinderScreen> {
         const SnackBar(content: Text('Choose whether you know the capacity.')),
       );
       return;
+    }
+    if (_step == 2 &&
+        _capacityKnown == 'known' &&
+        _capacityController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Enter the capacity and its unit, or choose “Help me determine it”.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (_step == 2) {
+      final quantity = int.tryParse(_quantityController.text.trim());
+      if (quantity == null || quantity < 1 || quantity > 100000) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Enter a whole-number quantity from 1 to 100,000.'),
+          ),
+        );
+        return;
+      }
     }
     if (_step < 4) setState(() => _step++);
   }
@@ -109,7 +130,7 @@ class _SolutionFinderScreenState extends State<SolutionFinderScreen> {
         equipment: _loadController.text.trim(),
         capacityKnown: _capacityKnown == 'known',
         capacity: _capacityController.text.trim(),
-        quantity: int.tryParse(_quantityController.text) ?? 1,
+        quantity: int.parse(_quantityController.text.trim()),
         location: _locationController.text.trim(),
         timeline: _timelineController.text.trim(),
       );
@@ -261,6 +282,7 @@ class _SolutionFinderScreenState extends State<SolutionFinderScreen> {
                     TextField(
                       controller: _loadController,
                       maxLines: 4,
+                      maxLength: 1000,
                       textCapitalization: TextCapitalization.sentences,
                       decoration: const InputDecoration(
                         alignLabelWithHint: true,
@@ -293,8 +315,9 @@ class _SolutionFinderScreenState extends State<SolutionFinderScreen> {
                       TextField(
                         controller: _capacityController,
                         keyboardType: TextInputType.text,
+                        maxLength: 120,
                         decoration: const InputDecoration(
-                          labelText: 'Capacity (optional)',
+                          labelText: 'Capacity and unit *',
                           hintText: 'Enter the value and unit shown in your documents',
                         ),
                       ),
@@ -303,6 +326,7 @@ class _SolutionFinderScreenState extends State<SolutionFinderScreen> {
                     TextField(
                       controller: _quantityController,
                       keyboardType: TextInputType.number,
+                      maxLength: 6,
                       decoration: const InputDecoration(
                         labelText: 'Quantity',
                         hintText: '1',
@@ -312,6 +336,7 @@ class _SolutionFinderScreenState extends State<SolutionFinderScreen> {
                     TextField(
                       controller: _locationController,
                       textCapitalization: TextCapitalization.words,
+                      maxLength: 500,
                       decoration: const InputDecoration(
                         labelText: 'Project location (optional)',
                         hintText: 'City, state, or PIN code',
@@ -325,6 +350,7 @@ class _SolutionFinderScreenState extends State<SolutionFinderScreen> {
                     TextField(
                       controller: _timelineController,
                       textCapitalization: TextCapitalization.sentences,
+                      maxLength: 300,
                       decoration: const InputDecoration(
                         labelText: 'Expected timeline (optional)',
                         hintText: 'Share a preferred timeframe',
@@ -555,3 +581,4 @@ class _SummaryLine extends StatelessWidget {
     ),
   );
 }
+

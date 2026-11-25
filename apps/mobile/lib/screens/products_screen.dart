@@ -1,10 +1,10 @@
 import 'dart:async';
 
-import 'package:intl/intl.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../data/catalogue_models.dart';
 import '../data/catalogue_repository.dart';
+import '../data/product_formatters.dart';
 import '../data/product_selection_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
@@ -505,17 +505,11 @@ class _ProductCard extends StatelessWidget {
 }
 
 String _productPrice(ProductSummary product) {
-  final digits = product.currencyMinorUnit.clamp(0, 4);
-  final divisor = int.parse('1${'0' * digits}');
-  final symbol = product.currencyCode == 'INR'
-      ? '₹'
-      : '${product.currencyCode} ';
-  return NumberFormat.currency(
-    locale: 'en_IN',
-    name: product.currencyCode,
-    symbol: symbol,
-    decimalDigits: digits,
-  ).format(product.priceMinor! / divisor);
+  return formatProductPrice(
+    priceMinor: product.priceMinor!,
+    currencyMinorUnit: product.currencyMinorUnit,
+    currencyCode: product.currencyCode,
+  );
 }
 
 String _stockLabel(String status) => switch (status) {
@@ -524,3 +518,4 @@ String _stockLabel(String status) => switch (status) {
   'onbackorder' => 'Available on backorder',
   _ => '',
 };
+
