@@ -254,6 +254,31 @@ def test_catalogue_rejects_invalid_featured_product_ids(client: TestClient) -> N
     assert client.get("/api/v1/catalogue/products?ids=" + ",".join(str(uuid4()) for _ in range(13))).status_code == 422
 
 
+def test_admin_product_page_accepts_product_admin_items(client: TestClient) -> None:
+    category_id, product_id = uuid4(), uuid4()
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="catalogue-admin", role="admin", is_active=True))
+        session.add(ProductCategory(id=category_id, slug="admin-list-category", name="Admin list", is_published=True))
+        session.add(Product(
+            id=product_id,
+            category_id=category_id,
+            slug="admin-list-product",
+            name="Admin list product",
+            wordpress_source_id="wp-product-91",
+            is_published=True,
+        ))
+        session.commit()
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "catalogue-admin", "admin@example.test", "Admin", {"email_verified": True}
+    )
+
+    response = client.get("/api/v1/admin/catalogue/products")
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["id"] == str(product_id)
+
+
 def test_woocommerce_catalogue_rows_cannot_be_edited_published_or_deleted_in_cms(client: TestClient) -> None:
     category_id, product_id = uuid4(), uuid4()
     with Session(api_router.engine) as session:
