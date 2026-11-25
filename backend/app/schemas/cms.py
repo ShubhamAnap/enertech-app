@@ -129,12 +129,9 @@ class ProductAdmin(BaseModel):
     published_payload: dict[str, object] | None = None
 
 
-class PageProduct(ProductAdmin):
-    pass
-
-
 class ProductAdminPage(ProductPage):
-    items: list[PageProduct]
+    # The admin handler returns ProductAdmin instances directly.
+    items: list[ProductAdmin]
 
 
 class HomeContent(BaseModel):
