@@ -18,6 +18,18 @@ function textValue(value: unknown): string { return value == null ? "" : typeof 
 function humanize(key: string): string { return key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
 function catalogPrice(product: Product): string { if (product.price_minor == null) return "—"; const digits = productPriceDigits(product); return new Intl.NumberFormat("en-IN", { style: "currency", currency: product.currency_code, minimumFractionDigits: 0, maximumFractionDigits: digits }).format(product.price_minor / (10 ** digits)); }
 function productPriceDigits(product: Pick<Product, "currency_minor_unit">): number { return Math.max(0, Math.min(product.currency_minor_unit, 4)); }
+function productDatasheet(product: Pick<Product, "documents" | "wordpress_source_url">): { title: string; url: string } | null {
+  const match = (product.documents ?? []).find((document) => {
+    const url = document.url?.toLowerCase().split(/[?#]/, 1)[0] ?? "";
+    const title = document.title?.toLowerCase() ?? "";
+    return url.endsWith(".pdf") || /pdf|datasheet|catalogue|brochure/.test(title);
+  });
+  if (match?.url) return { title: match.title || "Product catalogue PDF", url: match.url };
+  const sourceUrl = product.wordpress_source_url ?? "";
+  return sourceUrl.toLowerCase().split(/[?#]/, 1)[0].endsWith(".pdf")
+    ? { title: "Product catalogue PDF", url: sourceUrl }
+    : null;
+}
 function BoltMark({ className = "h-4 w-4" }: { className?: string }) { return <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M13 2 4 14h7l-1 8 10-12h-7l1-8Z" /></svg>; }
 type AdminIconName = "overview" | "product" | "collection" | "import" | "quote" | "service" | "inquiry" | "home" | "contact" | "solution" | "chat" | "brand" | "customer" | "admin" | "audit" | "settings" | "menu" | "table" | "grid" | "document" | "edit" | "delete";
 const adminIconPaths: Record<AdminIconName, string[]> = {
@@ -842,8 +854,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                           {filteredProducts.map((product) => {
                             const category = categories.find((c) => c.id === product.category_id);
                             const isSelected = selectedProductIds.has(product.id);
-                            const pdfDoc = product.documents?.find((d) => d.url?.toLowerCase().endsWith(".pdf") || d.title?.toLowerCase().includes("pdf") || d.title?.toLowerCase().includes("datasheet"));
-                            const pdfUrl = pdfDoc?.url || (product.wordpress_source_url?.toLowerCase().endsWith(".pdf") ? product.wordpress_source_url : null);
+                            const pdfDoc = productDatasheet(product);
 
                             return (
                               <tr key={product.id} className={`hover:bg-base-200/40 transition-colors ${isSelected ? "bg-primary/5" : ""}`}>
@@ -905,11 +916,11 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                   <div className="flex items-center justify-end gap-1">
                                     {pdfUrl && (
                                       <a
-                                        href={pdfUrl}
+                                        href={pdfDoc.url}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="btn btn-ghost btn-xs text-primary"
-                                        title="View Datasheet PDF"
+                                        title={`View ${pdfDoc.title}`}
                                       >
                                         PDF
                                       </a>
@@ -942,8 +953,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                         {filteredProducts.map((product) => {
                           const category = categories.find((c) => c.id === product.category_id);
-                          const pdfDoc = product.documents?.find((d) => d.url?.toLowerCase().endsWith(".pdf") || d.title?.toLowerCase().includes("pdf") || d.title?.toLowerCase().includes("datasheet"));
-                          const pdfUrl = pdfDoc?.url || (product.wordpress_source_url?.toLowerCase().endsWith(".pdf") ? product.wordpress_source_url : null);
+                          const pdfDoc = productDatasheet(product);
 
                           return (
                             <div
@@ -1009,6 +1019,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                         target="_blank"
                                         rel="noreferrer"
                                         className="btn btn-sm btn-outline gap-1 h-10 min-h-10 px-2 font-medium border-base-300 hover:bg-base-200"
+                                        title={`View ${pdfDoc.title}`}
                                       >
                                         <AdminIcon name="document" /> PDF
                                       </a>
