@@ -2,8 +2,8 @@
 
 import { signOut, type User } from "firebase/auth";
 import Image from "next/image";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { api, getEffectiveApiBaseUrl, uploadMedia, type AdminAccount, type AuditEvent, type Category, type ContactInquiry, type ContentEnvelope, type CustomerProfile, type CustomerRequest, type KnowledgeArticle, type Product } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { api, uploadMedia, type AdminAccount, type AuditEvent, type Category, type ContactInquiry, type ContentEnvelope, type CustomerProfile, type CustomerRequest, type KnowledgeArticle, type Product } from "@/lib/api";
 import { getFirebaseAuth } from "@/lib/firebase";
 
 type Section = "overview" | "products" | "categories" | "home" | "contacts" | "solution_finder" | "chat" | "brand" | "wordpress" | "service" | "quotes" | "contact_inquiries" | "knowledge" | "customers" | "admins" | "audit";
@@ -18,6 +18,32 @@ function humanize(key: string): string { return key.replaceAll("_", " ").replace
 function catalogPrice(product: Product): string { if (product.price_minor == null) return "—"; const digits = productPriceDigits(product); return new Intl.NumberFormat("en-IN", { style: "currency", currency: product.currency_code, minimumFractionDigits: 0, maximumFractionDigits: digits }).format(product.price_minor / (10 ** digits)); }
 function productPriceDigits(product: Pick<Product, "currency_minor_unit">): number { return Math.max(0, Math.min(product.currency_minor_unit, 4)); }
 function BoltMark({ className = "h-4 w-4" }: { className?: string }) { return <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M13 2 4 14h7l-1 8 10-12h-7l1-8Z" /></svg>; }
+type AdminIconName = "overview" | "product" | "collection" | "import" | "quote" | "service" | "inquiry" | "home" | "contact" | "solution" | "chat" | "brand" | "customer" | "admin" | "audit" | "settings" | "menu" | "table" | "grid" | "document" | "edit" | "delete";
+const adminIconPaths: Record<AdminIconName, string[]> = {
+  overview: ["M3.5 3.5h7v7h-7z", "M13.5 3.5h7v7h-7z", "M3.5 13.5h7v7h-7z", "M13.5 13.5h7v7h-7z"],
+  product: ["m3 7 9-4 9 4-9 4-9-4Z", "M3 7v10l9 4 9-4V7", "M12 11v10", "m7 5 9 4"],
+  collection: ["M3.5 3.5h7v7h-7z", "M13.5 3.5h7v7h-7z", "M3.5 13.5h7v7h-7z", "M13.5 13.5h7v7h-7z"],
+  import: ["M13 2 4 14h7l-1 8 10-12h-7l1-8Z"],
+  quote: ["M6 3.5h9l4 4V20H6z", "M15 3.5V8h4", "M9 12h7", "M9 16h7"],
+  service: ["M14.5 6a5 5 0 0 0-6.3 6.3L3 17.5 6.5 21l5.2-5.2A5 5 0 0 0 18 9.5l-3 3-3.5-3.5 3-3Z"],
+  inquiry: ["M3 5h18v14H3z", "m3 7 9 6 9-6", "M7 3v2", "M17 3v2"],
+  home: ["m3 10 9-7 9 7", "M5 9v11h14V9", "M9 20v-6h6v6"],
+  contact: ["M16 20v-1.5a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4V20", "M10 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z", "M17 8h4", "M19 6v4"],
+  solution: ["M9 18h6", "M10 22h4", "M8.5 14.5a7 7 0 1 1 7 0c-.9.7-1.5 1.6-1.5 2.5h-4c0-.9-.6-1.8-1.5-2.5Z", "M12 3v1"],
+  chat: ["M4 5h16v11H8l-4 4z", "M8 9h8", "M8 12h5"],
+  brand: ["M4 4h16v16H4z", "M8 8h8", "M8 12h5", "M8 16h8"],
+  customer: ["M16 20v-1.5a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4V20", "M10 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z", "M16 4.2a3.5 3.5 0 0 1 0 6.6", "M20 20v-1.5a4 4 0 0 0-3-3.9"],
+  admin: ["M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6z", "m9 12 2 2 4-4"],
+  audit: ["M7 4h10v17H5V6h2", "M9 4V2h6v2", "M9 10h6", "M9 14h6", "M9 18h4"],
+  settings: ["M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z", "m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.8-.6a7.8 7.8 0 0 1-1.5.9l-.4 1.9h-2.8l-.4-1.9a7.8 7.8 0 0 1-1.5-.9l-1.8.6-1.4-2.4 1.4-1.1a7 7 0 0 1 0-1.8l-1.4-1.1 1.4-2.4 1.8.6a7.8 7.8 0 0 1 1.5-.9l.4-1.9h2.8l.4 1.9a7.8 7.8 0 0 1 1.5.9l1.8-.6 1.4 2.4-1.4 1.1a7 7 0 0 1 0 1.8Z"],
+  menu: ["M4 6h16", "M4 12h16", "M4 18h16"],
+  table: ["M3 4h18v16H3z", "M3 10h18", "M10 4v16"],
+  grid: ["M3.5 3.5h7v7h-7z", "M13.5 3.5h7v7h-7z", "M3.5 13.5h7v7h-7z", "M13.5 13.5h7v7h-7z"],
+  document: ["M6 3h9l4 4v14H6z", "M15 3v5h4", "M9 13h7", "M9 17h7"],
+  edit: ["m4 16.5-.8 4.3 4.3-.8L19 8.5 15.5 5z", "m13.5 7 3.5 3.5"],
+  delete: ["M4 7h16", "M10 11v6", "M14 11v6", "m5 7 1 14h12l1-14", "M9 7V4h6v3"],
+};
+function AdminIcon({ name, className = "h-4 w-4" }: { name: AdminIconName; className?: string }) { return <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>{adminIconPaths[name].map((path) => <path key={path} d={path} />)}</svg>; }
 function stockLabel(status: Product["stock_status"]): string { return ({ instock: "In stock", outofstock: "Out of stock", onbackorder: "On backorder", unknown: "Not provided" })[status]; }
 function stockBadgeClass(status: Product["stock_status"]): string { return ({ instock: "badge-success", outofstock: "badge-error", onbackorder: "badge-warning", unknown: "badge-ghost" })[status]; }
 const requestTransitions: Record<string, Record<string, string[]>> = {
@@ -85,29 +111,45 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [inquiryStatusFilter, setInquiryStatusFilter] = useState("all");
   const [inquiryQuery, setInquiryQuery] = useState("");
   const [inquiryHasMore, setInquiryHasMore] = useState(false);
-  const [showApiModal, setShowApiModal] = useState(false);
-  const [customApiUrl, setCustomApiUrl] = useState("");
+  const catalogueRequestId = useRef(0);
   const title = sectionNames[section];
 
-  const loadCatalogue = useCallback(async (productOffset = 0, categoryOffset = 0, append = false) => {
+  const loadCatalogue = useCallback(async (productOffset = 0, categoryOffset = 0, append = false, searchTerm = query) => {
+    const requestId = ++catalogueRequestId.current;
     setLoading(true); setError("");
-    try {
-      const catsPromise = api<Category[]>(user, `/admin/catalogue/categories?limit=500&offset=${categoryOffset}&q=${encodeURIComponent(query)}`).catch((e) => {
-        console.warn("Categories fetch:", e);
-        return [] as Category[];
-      });
-      const prodsPromise = api<{ items: Product[]; total: number }>(user, `/admin/catalogue/products?limit=300&offset=${productOffset}&q=${encodeURIComponent(query)}`);
-      const [nextCategories, page] = await Promise.all([catsPromise, prodsPromise]);
-      setCategories((current) => append ? [...current, ...nextCategories] : nextCategories);
-      setCategoryHasMore(nextCategories.length === 500);
+    const [categoriesResult, productsResult] = await Promise.allSettled([
+      api<Category[]>(user, `/admin/catalogue/categories?limit=500&offset=${categoryOffset}&q=${encodeURIComponent(searchTerm)}`),
+      api<{ items: Product[]; total: number }>(user, `/admin/catalogue/products?limit=500&offset=${productOffset}&q=${encodeURIComponent(searchTerm)}`),
+    ]);
+    if (requestId !== catalogueRequestId.current) return;
+
+    const errors: string[] = [];
+    if (categoriesResult.status === "fulfilled") {
+      setCategories((current) => append ? [...current, ...categoriesResult.value] : categoriesResult.value);
+      setCategoryHasMore(categoriesResult.value.length === 500);
+    } else {
+      if (!append) {
+        setCategories([]);
+        setCategoryHasMore(false);
+      }
+      errors.push(`Collections: ${categoriesResult.reason instanceof Error ? categoriesResult.reason.message : "could not be loaded"}`);
+    }
+
+    if (productsResult.status === "fulfilled") {
+      const page = productsResult.value;
       setProducts((current) => append ? [...current, ...page.items] : page.items);
       setProductTotal(page.total);
       setProductHasMore(productOffset + page.items.length < page.total);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not load catalogue data.");
-    } finally {
-      setLoading(false);
+    } else {
+      if (!append) {
+        setProducts([]);
+        setProductTotal(0);
+        setProductHasMore(false);
+      }
+      errors.push(`Products: ${productsResult.reason instanceof Error ? productsResult.reason.message : "could not be loaded"}`);
     }
+    if (errors.length) setError(errors.join(" "));
+    setLoading(false);
   }, [query, user]);
 
   const loadContent = useCallback(async (key: string) => {
@@ -199,9 +241,14 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     return () => window.clearTimeout(timer);
   }, [section, loadCatalogue]);
   useEffect(() => {
-    const timer = window.setTimeout(() => { if (["home", "contacts", "solution_finder", "chat", "brand"].includes(section)) void loadContent(section); }, 0);
+    const timer = window.setTimeout(() => {
+      if (["home", "contacts", "solution_finder", "chat", "brand"].includes(section)) {
+        void loadContent(section);
+        if (section === "home") void loadCatalogue(0, 0, false, "");
+      }
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [section, loadContent]);
+  }, [section, loadContent, loadCatalogue]);
   useEffect(() => {
     const timer = window.setTimeout(() => { if (section === "service" || section === "quotes") void loadRequests(section === "service" ? "service" : "quote"); }, 0);
     return () => window.clearTimeout(timer);
@@ -434,7 +481,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
             <ul className="menu nav-menu">
               <li>
                 <button className={section === "overview" ? "active" : ""} onClick={() => { setSection("overview"); setMenuOpen(false); }}>
-                  <span>◫</span><span>Overview & Analytics</span>
+                  <AdminIcon name="overview" /><span>Overview & Analytics</span>
                 </button>
               </li>
             </ul>
@@ -444,7 +491,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
               {(["products", "categories", "wordpress"] as Section[]).map((key) => (
                 <li key={key}>
                   <button className={section === key ? "active" : ""} onClick={() => { setSection(key); setMenuOpen(false); }}>
-                    <span aria-hidden="true">{key === "products" ? "◇" : key === "categories" ? "▦" : <BoltMark />}</span>
+                    <AdminIcon name={key === "products" ? "product" : key === "categories" ? "collection" : "import"} />
                     <span>{sectionNames[key]}</span>
                   </button>
                 </li>
@@ -458,7 +505,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   {(["quotes", "service", "contact_inquiries"] as Section[]).map((key) => (
                     <li key={key}>
                       <button className={section === key ? "active" : ""} onClick={() => { setSection(key); setMenuOpen(false); }}>
-                        <span aria-hidden="true">{key === "quotes" ? "▤" : key === "service" ? "⚙" : "✉"}</span>
+                        <AdminIcon name={key === "quotes" ? "quote" : key === "service" ? "service" : "inquiry"} />
                         <span>{sectionNames[key]}</span>
                       </button>
                     </li>
@@ -472,7 +519,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
               {contentSections.map(({ key }) => (
                 <li key={key}>
                   <button className={section === key ? "active" : ""} onClick={() => { setSection(key); setMenuOpen(false); }}>
-                    <span aria-hidden="true">{key === "chat" ? "◌" : "▤"}</span>
+                    <AdminIcon name={key === "home" ? "home" : key === "contacts" ? "contact" : key === "solution_finder" ? "solution" : key === "chat" ? "chat" : "brand"} />
                     <span>{sectionNames[key]}</span>
                   </button>
                 </li>
@@ -485,7 +532,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                 <ul className="menu nav-menu">
                   <li>
                     <button className={section === "customers" ? "active" : ""} onClick={() => { setSection("customers"); setMenuOpen(false); }}>
-                      <span aria-hidden="true">👥</span><span>Customer directory</span>
+                      <AdminIcon name="customer" /><span>Customer directory</span>
                     </button>
                   </li>
                 </ul>
@@ -494,7 +541,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   {(role === "super_admin" ? (["admins", "audit"] as Section[]) : (["audit"] as Section[])).map((key) => (
                     <li key={key}>
                       <button className={section === key ? "active" : ""} onClick={() => { setSection(key); setMenuOpen(false); }}>
-                        <span aria-hidden="true">{key === "admins" ? "🛡" : "📋"}</span>
+                        <AdminIcon name={key === "admins" ? "admin" : "audit"} />
                         <span>{sectionNames[key]}</span>
                       </button>
                     </li>
@@ -505,10 +552,10 @@ export default function AdminShell({ user, role }: { user: User; role: string })
           </nav>
 
           <div className="sidebar-bottom">
-            <button className="environment-pill flex items-center justify-between w-full hover:bg-base-200/50 p-2 rounded-lg text-left" onClick={() => { setCustomApiUrl(localStorage.getItem("enertech_cms_api_url") || getEffectiveApiBaseUrl()); setShowApiModal(true); }}>
-              <span>API Endpoint</span>
-              <span className="text-[10px] opacity-60">⚙ Config</span>
-            </button>
+            <div className="environment-pill flex items-center justify-between w-full p-2 text-xs text-base-content/60">
+              <span>API connection</span>
+              <span>Private proxy</span>
+            </div>
             <div className="user-row">
               <span className="avatar-circle">{(user.displayName || user.email || "A").slice(0, 1).toUpperCase()}</span>
               <div className="min-w-0">
@@ -523,7 +570,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
         <div className="main-column">
           <header className="topbar">
             <div className="flex items-center gap-2">
-              <button className="btn btn-ghost btn-square mobile-menu" aria-label="Open navigation" onClick={() => setMenuOpen(true)}>☰</button>
+              <button className="btn btn-ghost btn-square mobile-menu" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><AdminIcon name="menu" className="h-5 w-5" /></button>
               <div className="breadcrumbs">Workspace <span className="mx-2 text-base-300">/</span><strong>{title}</strong></div>
             </div>
             <div className="topbar-actions flex items-center gap-3">
@@ -625,8 +672,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                 <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
                   <div>
                     <div className="flex items-center gap-2">
-                      <h1 className="text-2xl font-bold tracking-tight">Products</h1>
-                      <span className="badge badge-sm badge-ghost font-mono">{productTotal} matches</span>
+                      <h1 className="text-2xl font-bold tracking-tight">{section === "products" ? "Products" : "Collections"}</h1>
+                      <span className="badge badge-sm badge-ghost font-mono">{section === "products" ? `${productTotal} products` : `${categories.length}${categoryHasMore ? "+" : ""} collections`}</span>
                     </div>
                     {/* Sub-tabs: Products vs Collections */}
                     <div className="tabs tabs-boxed mt-2 inline-flex p-1 bg-base-200/60 rounded-lg">
@@ -726,14 +773,14 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                             onClick={() => setProductViewMode("table")}
                             title="Table View (Medusa default)"
                           >
-                            ☰ Table
+                            <AdminIcon name="table" /> Table
                           </button>
                           <button
                             className={`join-item btn btn-xs px-3 font-semibold ${productViewMode === "grid" ? "btn-active btn-primary text-white" : "btn-ghost"}`}
                             onClick={() => setProductViewMode("grid")}
                             title="Grid Card View"
                           >
-                            ⊞ Grid
+                            <AdminIcon name="grid" /> Grid
                           </button>
                         </div>
                       )}
@@ -936,23 +983,23 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                         href={pdfUrl}
                                         target="_blank"
                                         rel="noreferrer"
-                                        className="btn btn-xs btn-outline gap-1 h-7 min-h-7 px-2 font-medium border-base-300 hover:bg-base-200"
+                                        className="btn btn-sm btn-outline gap-1 h-10 min-h-10 px-2 font-medium border-base-300 hover:bg-base-200"
                                       >
-                                        📄 PDF
+                                        <AdminIcon name="document" /> PDF
                                       </a>
                                     )}
                                     <button
                                       disabled={Boolean(product.wordpress_source_id)}
                                       onClick={() => editProduct(product)}
-                                      className="btn btn-xs btn-outline gap-1 h-7 min-h-7 px-2 font-medium border-base-300 hover:bg-base-200"
+                                      className="btn btn-sm btn-outline gap-1 h-10 min-h-10 px-2 font-medium border-base-300 hover:bg-base-200"
                                       title={product.wordpress_source_id ? "Managed by WooCommerce; edit it there, then sync again" : "Edit"}
                                     >
-                                      ✎ Edit
+                                      <AdminIcon name="edit" /> Edit
                                     </button>
                                     <button
                                       disabled={Boolean(product.wordpress_source_id)}
                                       onClick={() => product.is_published ? void unpublish(`/admin/catalogue/products/${product.id}/unpublish`) : void publish(`/admin/catalogue/products/${product.id}/publish`)}
-                                      className="btn btn-xs btn-outline gap-1 h-7 min-h-7 px-2 font-medium border-base-300 hover:bg-base-200"
+                                      className="btn btn-sm btn-outline gap-1 h-10 min-h-10 px-2 font-medium border-base-300 hover:bg-base-200"
                                       title={product.wordpress_source_id ? "Managed by WooCommerce" : product.is_published ? "Unpublish" : "Publish"}
                                     >
                                       {product.is_published ? "Unpublish" : "Publish"}
@@ -960,10 +1007,10 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                     <button
                                       disabled={Boolean(product.wordpress_source_id)}
                                       onClick={() => deleteProductItem(product.id, product.name)}
-                                      className="btn btn-xs btn-outline btn-error gap-1 h-7 min-h-7 px-2 font-medium hover:text-white"
+                                      className="btn btn-sm btn-outline btn-error gap-1 h-10 min-h-10 px-2 font-medium hover:text-white"
                                       title={product.wordpress_source_id ? "Managed by WooCommerce; remove it there, then sync again" : "Delete"}
                                     >
-                                      🗑 Delete
+                                      <AdminIcon name="delete" /> Delete
                                     </button>
                                   </div>
                                 </div>
@@ -1367,6 +1414,12 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         {Object.entries(contentDraft).map(([key, value]) => (
                           <ContentField key={key} field={key} value={value} categories={categories} products={products} onChange={(next) => setContentDraft((current) => ({ ...current, [key]: next }))} />
                         ))}
+                        {section === "home" && (productHasMore || categoryHasMore) && (
+                          <div className="flex flex-col gap-2 rounded-lg border border-base-300 p-3 sm:col-span-2 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-sm text-base-content/70">Featured selectors include {products.length} products and {categories.length} collections. Load more to reach the rest of the catalogue.</p>
+                            <button className="btn btn-outline" disabled={loading} onClick={() => void loadCatalogue(products.length, categories.length, true, "")}>Load more selector options</button>
+                          </div>
+                        )}
                       </div>
                     </article>
                     <aside className="card panel h-fit">
@@ -1606,62 +1659,6 @@ export default function AdminShell({ user, role }: { user: User; role: string })
           </main>
         </div>
       </div>
-
-      {/* API CONFIGURATION MODAL */}
-      {showApiModal && (
-        <dialog open className="modal modal-open">
-          <div className="modal-box max-w-lg">
-            <h2 className="text-xl font-bold">API Server Connection</h2>
-            <p className="text-xs text-base-content/60 mt-1 mb-4">
-              Configure the API base URL used by this CMS to communicate with the FastAPI backend.
-            </p>
-            <div className="space-y-3">
-              <label className="form-control gap-1">
-                <span className="label-text font-semibold">Active Backend API Endpoint</span>
-                <input
-                  className="input input-bordered font-mono text-xs"
-                  value={customApiUrl}
-                  onChange={(e) => setCustomApiUrl(e.target.value)}
-                  placeholder="https://api.yourdomain.com/api/v1 or /backend-api/api/v1"
-                />
-              </label>
-              <div className="text-xs text-base-content/60 space-y-1 bg-base-200/50 p-3 rounded-lg">
-                <p>• <strong>Default Proxy:</strong> <code>/backend-api/api/v1</code> (Internal Next.js rewrite)</p>
-                <p>• <strong>Local Development:</strong> <code>http://127.0.0.1:8000/api/v1</code></p>
-              </div>
-            </div>
-            <div className="modal-action">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => {
-                  localStorage.removeItem("enertech_cms_api_url");
-                  setCustomApiUrl(getEffectiveApiBaseUrl());
-                  setShowApiModal(false);
-                }}
-              >
-                Reset to Default
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => {
-                  if (customApiUrl.trim()) {
-                    localStorage.setItem("enertech_cms_api_url", customApiUrl.trim());
-                  } else {
-                    localStorage.removeItem("enertech_cms_api_url");
-                  }
-                  setShowApiModal(false);
-                  window.location.reload();
-                }}
-              >
-                Save & Apply
-              </button>
-            </div>
-          </div>
-          <form method="dialog" className="modal-backdrop"><button onClick={() => setShowApiModal(false)}>close</button></form>
-        </dialog>
-      )}
 
       {/* EDIT/CREATE CATEGORY MODAL */}
       {showCategoryForm && (
