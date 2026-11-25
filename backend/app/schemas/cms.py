@@ -268,6 +268,10 @@ class CustomerRequestAdmin(CustomerRequestPublic):
     customer_uid: str
     customer_email: str
     assigned_to: str | None
+    customer_name: str | None = None
+    customer_phone: str | None = None
+    customer_company: str | None = None
+    customer_location: str | None = None
 
 
 class CustomerRequestUpdate(BaseModel):

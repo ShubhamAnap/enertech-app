@@ -1277,12 +1277,19 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         <header className="panel-head">
                           <div>
                             <h2>{record.kind === "service" ? String(record.payload.product_model ?? "Service request") : String(record.payload.application ?? "Quote enquiry")}</h2>
-                            <p>{record.customer_email} · {new Date(record.created_at).toLocaleString()}</p>
+                            <p>{record.customer_name ? `${record.customer_name} · ` : ""}{record.customer_email} · {new Date(record.created_at).toLocaleString()}</p>
                           </div>
                           <span className="badge badge-info">{record.status.replaceAll("_", " ")}</span>
                         </header>
                         <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
                           <div className="text-sm leading-6 text-base-content/75">
+                            <div className="mb-3 flex flex-wrap gap-x-5 gap-y-1 rounded-box bg-base-200/60 p-3">
+                              <span><strong className="text-base-content">Customer:</strong> {record.customer_name || "Profile not completed"}</span>
+                              {record.customer_phone && <a className="link link-primary" href={`tel:${encodeURIComponent(record.customer_phone)}`}>{record.customer_phone}</a>}
+                              {record.customer_company && <span>{record.customer_company}</span>}
+                              {record.customer_location && <span>{record.customer_location}</span>}
+                              {!record.customer_phone && <span>{record.customer_email}</span>}
+                            </div>
                             <strong className="text-base-content">{record.kind === "service" ? "Problem Description" : "Equipment or Load"}</strong>
                             <p className="whitespace-pre-wrap">{String(record.payload.description ?? record.payload.equipment_or_load ?? "")}</p>
                             <p className="mt-2">Location: {String(record.payload.service_location ?? record.payload.project_location ?? "Not provided")}</p>

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import AdminIdentity, Identity, get_current_identity, require_admin_roles
 from app.db.session import get_session
-from app.models import AdminAccount, AuditEvent, CustomerRequest, ContactInquiry
+from app.models import AdminAccount, AuditEvent, CustomerRequest, ContactInquiry, CustomerProfile
 from app.schemas.cms import CustomerRequestAdmin, CustomerRequestPublic, CustomerRequestUpdate, QuoteRequestWrite, ServiceRequestWrite, ContactInquiryCreate, ContactInquiryAdmin, ContactInquiryUpdate
 
 router = APIRouter(tags=["customer requests"])
@@ -49,10 +49,14 @@ def _public(record: CustomerRequest) -> CustomerRequestPublic:
     )
 
 
-def _to_admin(record: CustomerRequest) -> CustomerRequestAdmin:
+def _to_admin(record: CustomerRequest, profile: CustomerProfile | None = None) -> CustomerRequestAdmin:
     return CustomerRequestAdmin(
         **_public(record).model_dump(), customer_uid=record.customer_uid,
         customer_email=record.customer_email, assigned_to=record.assigned_to,
+        customer_name=profile.name if profile else None,
+        customer_phone=profile.mobile_number if profile else None,
+        customer_company=profile.company_name if profile else None,
+        customer_location=profile.location if profile else None,
     )
 
 
@@ -136,7 +140,9 @@ def admin_requests(
             cast(CustomerRequest.payload, String).ilike(term),
         ))
     _ = admin_identity
-    return [_to_admin(record) for record in session.scalars(query.order_by(CustomerRequest.created_at.desc(), CustomerRequest.id.desc()).limit(limit).offset(offset))]
+    records = list(session.scalars(query.order_by(CustomerRequest.created_at.desc(), CustomerRequest.id.desc()).limit(limit).offset(offset)))
+    profiles = {profile.firebase_uid: profile for profile in session.scalars(select(CustomerProfile).where(CustomerProfile.firebase_uid.in_({record.customer_uid for record in records})))} if records else {}
+    return [_to_admin(record, profiles.get(record.customer_uid)) for record in records]
 
 
 @router.patch("/admin/requests/{request_id}", response_model=CustomerRequestAdmin)
