@@ -874,8 +874,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                     </div>
                                   </div>
                                 </td>
-                                <td>
-                                  <span className="badge badge-sm badge-outline text-xs font-medium">
+                                <td className="max-w-40">
+                                  <span className="badge badge-sm badge-outline h-auto min-h-6 max-w-full whitespace-normal break-words px-2 py-1 text-left text-xs font-medium leading-tight">
                                     {category?.name || "General"}
                                   </span>
                                 </td>
@@ -1435,7 +1435,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                           <p>Changes are validated and sent to the mobile app upon publish.</p>
                         </div>
                       </header>
-                      <div className="grid gap-4 p-5 sm:grid-cols-2">
+                      <div className="grid min-w-0 gap-4 p-5 sm:grid-cols-2">
                         {Object.entries(contentDraft).map(([key, value]) => (
                           <ContentField key={key} field={key} value={value} categories={categories} products={products} onChange={(next) => setContentDraft((current) => ({ ...current, [key]: next }))} />
                         ))}
@@ -1879,9 +1879,12 @@ function ContentField({ field, value, categories, products, onChange }: { field:
     const options = (field === "featured_category_ids" ? categories : products).filter((item) => item.is_published);
     const selected = new Set((Array.isArray(value) ? value : []).filter((item: unknown): item is string => typeof item === "string"));
     const label = field === "featured_category_ids" ? "Featured collections" : "Featured products";
-    return <fieldset className="form-control gap-2 sm:col-span-2"><legend className="font-semibold">{label}</legend><p className="text-xs text-base-content/60">Select up to 12. Leave all unchecked to show every published {field === "featured_category_ids" ? "collection" : "product"} on Home.</p><div className="grid max-h-56 gap-1 overflow-y-auto rounded-lg border border-base-300 p-2 sm:grid-cols-2">{options.length ? options.map((item) => <label key={item.id} className="label cursor-pointer justify-start gap-2 rounded-md px-2 py-1"><input className="checkbox checkbox-sm checkbox-primary" type="checkbox" checked={selected.has(item.id)} disabled={!selected.has(item.id) && selected.size >= 12} onChange={(event) => { const next = new Set(selected); if (event.target.checked) next.add(item.id); else next.delete(item.id); onChange([...next]); }} /><span className="label-text">{item.name}</span></label>) : <span className="p-2 text-xs text-base-content/60">Publish items in the catalogue first.</span>}</div>{selected.size >= 12 && <span className="label-text-alt">Maximum of 12 selected.</span>}</fieldset>;
+    return <fieldset className="form-control grid min-w-0 gap-2 sm:col-span-2"><legend className="font-semibold">{label}</legend><p className="text-xs text-base-content/60">Select up to 12. Leave all unchecked to show every published {field === "featured_category_ids" ? "collection" : "product"} on Home.</p><div className="grid min-w-0 max-h-56 grid-cols-1 gap-1 overflow-y-auto overflow-x-hidden rounded-lg border border-base-300 p-2 sm:grid-cols-2">{options.length ? options.map((item) => <label key={item.id} className="label flex min-w-0 w-full cursor-pointer items-start justify-start gap-2 rounded-md px-2 py-1"><input className="checkbox checkbox-sm checkbox-primary mt-0.5 shrink-0" type="checkbox" checked={selected.has(item.id)} disabled={!selected.has(item.id) && selected.size >= 12} onChange={(event) => { const next = new Set(selected); if (event.target.checked) next.add(item.id); else next.delete(item.id); onChange([...next]); }} /><span className="label-text min-w-0 flex-1 whitespace-normal break-words leading-snug">{item.name}</span></label>) : <span className="p-2 text-xs text-base-content/60">Publish items in the catalogue first.</span>}</div>{selected.size >= 12 && <span className="label-text-alt">Maximum of 12 selected.</span>}</fieldset>;
   }
-  if (Array.isArray(value)) return <label className="form-control gap-1 sm:col-span-2"><span className="label-text font-semibold">{humanize(field)} · one per line</span><textarea className="textarea textarea-bordered min-h-20" value={value.join("\n")} onChange={(event) => onChange(event.target.value.split("\n").map((item) => item.trim()).filter(Boolean))} /></label>;
+  if (Array.isArray(value)) {
+    const inputId = `content-${field}`;
+    return <div className="form-control flex min-w-0 flex-col items-stretch gap-1 sm:col-span-2"><label className="block text-sm font-semibold" htmlFor={inputId}>{humanize(field)} · one per line</label><textarea id={inputId} className="textarea textarea-bordered min-h-28 w-full" value={value.join("\n")} onChange={(event) => onChange(event.target.value.split("\n").map((item) => item.trim()).filter(Boolean))} /></div>;
+  }
   const choices: Record<string, string[]> = { hero_cta_target: ["products", "solution_finder", "quote", "support"], integration: ["iframe", "hosted_widget"] };
   if (choices[field]) return <label className="form-control gap-1"><span className="label-text font-semibold">{humanize(field)}</span><select className="select select-bordered" value={String(value)} onChange={(event) => onChange(event.target.value)}>{choices[field].map((choice) => <option key={choice} value={choice}>{humanize(choice)}</option>)}</select></label>;
   if (field === "logo_url" || field === "support_icon_url") return <label className="form-control gap-2"><span className="label-text font-semibold">{humanize(field)}</span><input className="input input-bordered" type="url" value={textValue(value)} onChange={(event) => onChange(event.target.value)} /><input className="file-input file-input-bordered file-input-sm w-full" type="file" accept="image/png,image/jpeg,image/webp" aria-label={`Upload ${humanize(field)}`} disabled={uploading} onChange={async (event) => { const file = event.target.files?.[0]; const authUser = getFirebaseAuth()?.currentUser; if (!file || !authUser) return; setUploading(true); setUploadError(""); try { const asset = await uploadMedia(authUser, file); onChange(asset.url); } catch (cause) { setUploadError(cause instanceof Error ? cause.message : "Image upload failed."); } finally { setUploading(false); event.target.value = ""; } }} />{uploading && <span className="label-text-alt">Uploading to Supabase Storage…</span>}{uploadError && <span role="alert" className="text-xs text-error">{uploadError}</span>}</label>;
@@ -1890,3 +1893,4 @@ function ContentField({ field, value, categories, products, onChange }: { field:
   const inputId = `content-${field}`;
   return <div className={`min-w-0 ${long ? "sm:col-span-2" : ""}`}><label className="mb-1 block text-sm font-semibold" htmlFor={inputId}>{humanize(field)}</label>{long ? <textarea id={inputId} className="textarea textarea-bordered min-h-20 w-full" value={textValue(value)} onChange={(event) => onChange(event.target.value)} /> : <input id={inputId} className="input input-bordered w-full" type={inputType} value={textValue(value)} onChange={(event) => onChange(event.target.value)} />}</div>;
 }
+
