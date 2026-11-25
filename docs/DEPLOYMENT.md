@@ -30,9 +30,11 @@ Use Supabase backups and verify a restore before production. Configure the CMS d
 
 ## Android package
 
-After Firebase and the production API URL are configured in ignored `apps/mobile/.env`, run from the workspace root. Set `API_BASE_URL` to the Coolify API service's public HTTPS domain followed by `/api/v1` (for example, `https://api.example.com/api/v1`; replace the example with the real API domain). You can find the domain in Coolify under the EnerTech API service's Domains settings and confirm the host with `/health/ready`.
+After Firebase and the production API URL are configured in ignored `apps/mobile/.env`, run from the workspace root. Set `API_BASE_URL` to the Coolify API service's public HTTPS domain followed by `/api/v1` (for example, `https://api.example.com/api/v1`; replace the example with the real API domain). The readiness route is `/api/v1/health/ready`.
 
 The mobile `.env` also requires `GOOGLE_SERVER_CLIENT_ID` for Google sign-in. Enable Google as a Firebase Authentication provider, then use the Web OAuth client ID configured for that Firebase project (Firebase Console → Authentication → Google provider, or the matching Web client under Google Cloud Console → APIs & Services → Credentials). Do not use the Android OAuth client ID for this value.
+
+The APK release signing certificate SHA-1 must be registered on the Android app in Firebase Project settings → General → Your apps → SHA certificate fingerprints. Download the refreshed `google-services.json` and replace `apps/mobile/android/app/google-services.json` after registering the key. The currently built local APK has SHA-1 `78:EE:94:85:3B:3F:86:21:74:9C:51:3D:9F:02:31:E6:B1:58:09:37`; the bundled file currently has a different fingerprint, so Google sign-in is not release-ready yet.
 
 Release builds also require the existing production upload/release keystore. Set `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` in the build environment; keep passwords out of mobile `.env` and source control. Use the same signing identity as the app already distributed to customers. The build stops if the endpoint is local or HTTPS configuration/signing values are missing.
 
@@ -46,4 +48,5 @@ Output: `update.apk` at the workspace root (copied from `apps/mobile/build/app/o
 
 ## Current gate
 
-Source code has been pushed to GitHub `main`; no Coolify deployment, production CMS image, or current APK has been produced. Configure Firebase, Supabase, the Coolify domains and secrets, and optional WooCommerce credentials before creating a staging deployment. Verify sign-in, role boundaries, CMS publishing, product sync, widget loading, customer request ownership, backup, and rollback there.
+The latest observed CMS screen reports **CMS access not granted**. The API denies CMS access unless the verified Firebase UID has an active `admin_accounts` record or appears in `BOOTSTRAP_SUPER_ADMIN_UIDS`. To provision the first administrator, copy the signed-in user's UID from Firebase Console → Authentication → Users, set that UID in Coolify, and redeploy the API. Then create an active `super_admin` account in CMS → Admin access, remove the temporary bootstrap UID, and redeploy the API again. A migration-safe patch for the existing Supabase `contact_inquiries` schema was pushed as `c1c0691ba9dbef629a7ab0af89a083ceea8b437f`; production migration completion and API health still require confirmation. Verify CMS/API HTTPS, CMS publishing, product sync, media uploads, request ownership, backups, and rollback in staging before production acceptance.
+

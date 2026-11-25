@@ -1,9 +1,30 @@
 # EnerTech App + CMS Master Audit Plan
 
-Audit date: 2026-11-24
+Audit date: 2026-11-25
 
 Scope: Flutter customer app, Next.js CMS, FastAPI API, database/migrations, and WooCommerce synchronization.
-Status: Source audit and source fixes completed for the items checked below. Live Firebase, Supabase, WordPress, deployment, and device configurations are not available in this workspace.
+Status: Source-level audit and fixes are ongoing. Production acceptance is not complete. The latest CMS screen proves Firebase sign-in and API role verification are now responding, but the signed-in UID is not authorized as a CMS administrator. The database URL is no longer the current visible failure; provision the first super-admin UID as described below.
+
+## Current delivery snapshot — 2026-11-25
+
+- The local CMS now reports catalogue-load failures instead of treating them as an empty collection list, ignores stale catalogue responses, and can page through every product/collection from the Home featured selectors. Catalogue request size matches the API's 500-item maximum.
+- Current local verification (2026-11-25): CMS ESLint and TypeScript `--noEmit` pass; Flutter `analyze` and all six Flutter tests pass. A Next.js production build passed earlier using placeholder public Firebase/API values, not live services.
+- Backend verification: 23 pytest checks passed in this turn; Alembic offline SQL compiled through `c42e17b3d906`. Live database migration completion is not visible from the local workspace.
+- The workspace `update.apk` is 63,615,191 bytes, matches `apps/mobile/build/app/outputs/flutter-apk/app-release.apk`, and was built at 2026-11-25 10:58 local time. Its v2 signature verifies; signer SHA-1 is `78:EE:94:85:3B:3F:86:21:74:9C:51:3D:9F:02:31:E6:B1:58:09:37` and SHA-256 is `dff76233c8810fc2b05a6c80688223abf2ab4f2f395356f7ece2dca080696080`.
+- The current bundled `google-services.json` targets Firebase project `enertech-ups`, package `com.enertech.enertech_customer`, and includes the same Android SHA-1 as the APK signer. This closes the fingerprint/config mismatch at source level, but live Google sign-in and device installation remain unverified.
+- The local mobile source reads the Flutter `--dart-define` Firebase values passed by `infra/build-mobile.ps1`, fixing the setup-incomplete path when the `.env` asset is absent. The current APK includes the updated source as of the 10:58 build; GitHub `main` does not yet include the uncommitted worktree edits.
+- The user updated `SUPABASE_DATABASE_URL`. The first subsequent API startup failure was a duplicate `contact_inquiries` table because the supplied Supabase schema already contained it. A migration-safe fix was pushed as `c1c0691ba9dbef629a7ab0af89a083ceea8b437f`; the subsequent CMS screen now shows **CMS access not granted**, which is an authorization denial rather than an API/database connectivity error.
+- Current CMS gate: the API only grants CMS access to an active `admin_accounts` record or a UID in `BOOTSTRAP_SUPER_ADMIN_UIDS`. The project owner must bootstrap the exact Firebase UID used to sign in, deploy the API, create an active super-admin record in CMS, then remove the temporary bootstrap UID and redeploy.
+- The latest browser certificate screenshot shows a Let's Encrypt certificate issued to `cms.enertechups.cloud`, with a validity period of 2026-11-25 through 2027-02-23. Chrome still labels the page `Not secure`; the screenshot alone does not prove the browser used HTTPS or trusted the full certificate chain. Open `https://cms.enertechups.cloud` explicitly and inspect the browser's certificate/connection details; verify the API hostname too.
+- GitHub `main` is at `c1c0691ba9dbef629a7ab0af89a083ceea8b437f`. The local checkout has two local commits and uncommitted edits based on its previous remote ref; reconcile it selectively before publishing local work.
+
+## Account-owner actions required
+
+These steps require access to the user's Firebase, Supabase, or Coolify accounts; do not share secrets in chat.
+
+1. **Bootstrap CMS access:** in Firebase Console → EnerTech Ups → Authentication → Users, copy the UID for the exact account used at `cms.enertechups.cloud`. In Coolify, set `BOOTSTRAP_SUPER_ADMIN_UIDS` to that UID (comma-separated only if needed), save, and redeploy the API. In CMS → Admin access, create/verify that UID as an active `super_admin`, then remove the temporary UID from Coolify and redeploy the API. Never share service-account or database secrets in chat.
+2. **Verify Google sign-in live:** the current bundled Firebase configuration contains the current APK's release SHA-1, but the project owner must confirm Google and Email/Password providers are enabled, the web client ID is configured, and the release APK can complete sign-in on a real device.
+3. **Confirm secure domain access:** open `https://cms.enertechups.cloud` and `https://api.enertechups.cloud` directly. If either still shows a browser security warning, inspect its certificate details and Coolify domain mapping before accepting production traffic.
 
 ## Priority 0 — Security and data correctness
 
@@ -40,6 +61,7 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 - [x] Test customer-request owner scoping, content-editor restrictions, closed-request transitions, media size limits, and contact-inquiry limits keyed by Firebase UID against isolated SQLite.
 - [x] Rate-limit quote and service submissions together to ten per verified Firebase account per hour; index customer UID plus request creation time and test the cross-endpoint cap.
 - [ ] Verify Firebase token revocation and execute/rollback schema migrations against staging Supabase; verify live storage policies and role boundaries there.
+- [x] Register the current APK signer SHA-1 in Firebase and refresh the bundled Google services configuration; the current config fingerprint matches the verified APK signer. Live Google sign-in still needs device verification.
 
 ## Priority 1 — Core CMS content workflows
 
@@ -84,12 +106,13 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 
 - [x] Keep the Coolify variable template lean: require only API/CMS runtime and public build configuration, put standard WooCommerce routes/field mappings and the public media bucket in code defaults, and document WordPress/chat variables as feature-optional.
 - [ ] Replace temporary Coolify `sslip.io` HTTP domains with HTTPS domains before production; rebuild the CMS with `ALLOW_HTTP_TEST_API=false` and configure the production API URL in the customer app.
+- [ ] Resolve the browser's `Not secure` warning for `cms.enertechups.cloud` and verify the API domain certificate as well.
 - [ ] Configure real Firebase/Supabase/WordPress environments and validate secrets only in server-side deployment settings.
 - [x] Run CMS lint/typecheck, Flutter analyze, and Python syntax compilation for the source changes.
-- [ ] Run migration upgrade/rollback checks, backend/CMS test suites and production build, and Flutter widget checks in a configured environment.
+- [ ] Execute/rollback migrations against staging Supabase, rerun the CMS production build after the final deployment configuration, and verify Flutter widgets on a configured device. Current local backend tests (23), CMS lint/typecheck, earlier Flutter analysis/tests, and APK signature verification pass.
 - [ ] Complete live staging journeys: admin draft/publish → mobile update; quote/service submission → CMS assignment/status → customer tracking; upload → display; WooCommerce sync → published collection/product.
 - [ ] Configure domain/TLS, backups/restore, monitoring, release signing, privacy/support policies, and rollback ownership.
-- [ ] Build and verify a production APK once the production HTTPS API URL and existing release keystore are supplied; the build now rejects emulator-local API values and debug signing, and the 202 MB root `update.apk` is an ignored local artifact rather than current-source evidence.
+- [ ] Install the current signed APK on a device, exercise Firebase sign-in and all app workflows against the production HTTPS API, then publish the matching source revision and artifact. The signature and Android Firebase fingerprint now match, but the APK is not device- or live-API-verified.
 
 ## Confirmed implementation defects
 
@@ -124,6 +147,7 @@ Status: Source audit and source fixes completed for the items checked below. Liv
 29. A deliberately cleared nullable product price was replaced by the previous published price in CMS API responses; draft response mapping now honors an explicit `null` and product/collection editors compare draft values to the published snapshot.
 30. Offline catalogue filtering compared a category slug to each product's category UUID, so a cached category could appear empty; the repository now resolves the cached slug to its ID before filtering.
 31. Rapid catalogue searches could complete out of order and overwrite newer results, and leaving a featured category could preserve that filter; product loads now ignore stale responses and generic catalogue navigation clears the prior category.
+32. Google sign-in surfaced Firebase's raw package-certificate-hash failure text. The app now gives a recovery message and explicit Firebase Console steps; the release SHA still must be added by a Firebase administrator.
 
 ## Customer app specification parity
 
@@ -147,7 +171,7 @@ The supplied CMS specification also calls for enquiry/quote/service queues, assi
 
 CMS app-content parity checked from source:
 
-- Home search prompt, intent-card copy, hero copy/CTA, announcement fields, section visibility/order, featured products, and featured collections are consumed. The CMS limits featured selectors to the 12 IDs accepted by the API; the app resolves selected product IDs directly instead of relying on its first 300 catalogue rows.
+- Home search prompt, intent-card copy, hero copy/CTA, announcement fields, section visibility/order, featured products, and featured collections are consumed. The CMS limits featured selectors to the 12 IDs accepted by the API; the app resolves selected product IDs directly, and the CMS Home selector now loads additional catalogue pages when needed.
 - Contact phone, WhatsApp, emails, address, support hours, and availability text are consumed by the support/contact screens.
 - Solution Finder options, step titles, and both helper prompts are consumed.
 - Brand display name and logo are consumed; `support_icon_url` is now displayed in the support header.
@@ -158,4 +182,5 @@ CMS app-content parity checked from source:
 
 - This document records source-level findings. No live service behavior can be confirmed without the external project credentials and source mappings.
 - Visual/device QA remains open. The UI/UX Pro Max search returned guidance for visible labels, correct input types, password-manager support, and confirmation feedback; small-screen, landscape, dynamic-text, contrast, touch-target, and keyboard-focus checks still need rendered device/browser review.
-- Local checks: CMS ESLint, TypeScript `--noEmit`, and production build pass with test values, including earlier explicit checks for the `sslip.io` test exception and rejection of arbitrary HTTP domains. All 23 backend tests pass, including WooCommerce defaults, database-error redaction, media upload limits, authorization, request ownership/transitions, both rate limits, catalogue ownership/delete guards, and selected-product ID filtering across pages. Python compilation passes, and Alembic offline SQL compiles through `c42e17b3d906`. Flutter analyze reports no issues and all six app tests pass, including the latest selected-product lookup change. No emulator/device is available, so installed-device visual verification remains open. The Android release guard stops until a production HTTPS API and release signing key are configured. No live database migration or staging deployment was run.
+- Latest local checks: CMS ESLint, TypeScript `--noEmit`, and production build pass after the catalogue selector and icon/touch-target fixes. All 23 backend tests pass. Python compilation and Alembic offline SQL were previously verified through `c42e17b3d906`; no production/staging database migration was executed. Flutter analysis and six widget/unit tests passed in the earlier configured environment, but could not be repeated in this shell because the Flutter SDK is unavailable. No Android device is connected. The local APK signature and embedded build configuration were verified, but end-to-end Firebase/API behavior is not verified.
+

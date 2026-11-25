@@ -14,11 +14,11 @@
       },
       "oauth_client": [
         {
-          "client_id": "423316048940-mrqk68mr7l9qq3sb5539q0md7krmp4ib.apps.googleusercontent.com",
+          "client_id": "423316048940-qt7al8liehaaa8u291ig4cat5k7u329l.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.enertech.enertech_customer",
-            "certificate_hash": "abec76cc32c80ba677b0abc2fc041f17afa7f585"
+            "certificate_hash": "78ee94853b3f8621749c513d9f0231e6b1580937"
           }
         },
         {
