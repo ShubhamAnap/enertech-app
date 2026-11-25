@@ -42,9 +42,11 @@ services:
         NEXT_PUBLIC_FIREBASE_APP_ID: ${NEXT_PUBLIC_FIREBASE_APP_ID:?set Firebase web app ID}
         NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID:?set Firebase sender ID}
     restart: unless-stopped
+    # Start the CMS even when API readiness fails so the admin site remains
+    # reachable for diagnosis and configuration. API-backed CMS actions still
+    # report their own connection errors until the API becomes healthy.
     depends_on:
-      api:
-        condition: service_healthy
+      - api
     expose:
       - "3000"
     healthcheck:
@@ -53,3 +55,4 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+
