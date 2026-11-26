@@ -23,6 +23,8 @@ export type Product = {
   id: string;
   category_id: string;
   category_ids: string[];
+  app_collection_ids: string[];
+  wordpress_tag_ids: string[];
   slug: string;
   name: string;
   model_code: string | null;
@@ -39,6 +41,7 @@ export type Product = {
   stock_status: "instock" | "outofstock" | "onbackorder" | "unknown";
   stock_quantity: number | null;
   documents: ProductDocument[];
+  own_documents: ProductDocument[];
   catalog_pdf_url?: string | null;
   catalog_pdf_source?: "product" | "category" | "none";
   wordpress_source_id: string | null;
@@ -54,6 +57,7 @@ export type Product = {
 
 export type CatalogueSummary = {
   products_total: number;
+  products_unassigned: number;
   products_published: number;
   products_missing_pdf: number;
   products_category_overridden: number;

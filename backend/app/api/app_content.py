@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -50,6 +50,28 @@ def _as_envelope(record: AppConfig | None, key: str) -> ContentEnvelope:
 def public_app_config(session: Session = Depends(get_session)) -> dict[str, object]:
     records = session.scalars(select(AppConfig).where(AppConfig.published_payload.is_not(None)))
     result = {record.key: record.published_payload for record in records if record.key in CONTENT_SCHEMAS}
+    home = result.get("home")
+    if isinstance(home, dict):
+        visible_collection_ids = {
+            str(cid)
+            for cid in session.scalars(
+                select(ProductCategory.id).where(
+                    ProductCategory.is_published.is_(True),
+                    ProductCategory.is_app_collection.is_(True),
+                )
+            )
+        }
+        result["home"] = {
+            **home,
+            "featured_category_ids": [
+                str(cid) for cid in (home.get("featured_category_ids") or [])
+                if str(cid) in visible_collection_ids
+            ],
+            "featured_product_category_ids": [
+                str(cid) for cid in (home.get("featured_product_category_ids") or [])
+                if str(cid) in visible_collection_ids
+            ],
+        }
     chat = result.get("chat")
     settings = get_settings()
     if isinstance(chat, dict) and chat.get("enabled"):
@@ -125,8 +147,12 @@ def publish_app_config(
         home = HomeContent.model_validate(validated)
         for category_id in home.featured_category_ids:
             category = session.get(ProductCategory, category_id)
-            if category is None or not category.is_published:
-                raise HTTPException(status_code=422, detail="Featured collections must be published before they can appear on Home")
+            if category is None or not category.is_published or not category.is_app_collection:
+                raise HTTPException(status_code=422, detail="Featured collections must be published CMS collections before they can appear on Home")
+        for category_id in home.featured_product_category_ids:
+            category = session.get(ProductCategory, category_id)
+            if category is None or not category.is_published or not category.is_app_collection:
+                raise HTTPException(status_code=422, detail="Featured products source collections must be published CMS collections before they can appear on Home")
         for product_id in home.featured_product_ids:
             product = session.get(Product, product_id)
             if product is None or not product.is_published:

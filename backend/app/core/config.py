@@ -1,6 +1,5 @@
 from functools import lru_cache
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,7 +22,6 @@ class Settings(BaseSettings):
     wordpress_store_products_path: str = "wc/store/v1/products"
     wordpress_documents_path: str = "wp/v2/media"
     wordpress_wp_products_path: str = "wp/v2/product"
-    wordpress_wp_categories_path: str = "wp/v2/product_cat"
     wordpress_per_page: int = 100
     wordpress_html_fallback_enabled: bool = False
     wordpress_consumer_key: str = ""

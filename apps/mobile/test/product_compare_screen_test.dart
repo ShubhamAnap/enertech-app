@@ -8,7 +8,7 @@ import 'package:material_ui/material_ui.dart';
 
 class _CatalogueRepository extends CatalogueRepository {
   @override
-  Future<ProductDetails> getProduct(String slug) async => ProductDetails(
+  Future<ProductDetails> getProduct(String slug, {String? category}) async => ProductDetails(
     id: 'product-1',
     slug: slug,
     name: 'Industrial UPS',

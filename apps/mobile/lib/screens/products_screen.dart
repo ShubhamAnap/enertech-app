@@ -299,6 +299,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
                           builder: (_) => ProductDetailScreen(
+                            categorySlug: _selectedCategory,
                             repository: widget.repository,
                             selection: widget.selection,
                             product: _products[index],

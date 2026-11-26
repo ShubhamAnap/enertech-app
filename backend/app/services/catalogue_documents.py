@@ -56,15 +56,6 @@ class CategoryCatalogueLookup:
                 return self.by_key[wp_key]
         return None
 
-    def match_category_ids(self, category_ids: Iterable[UUID]) -> tuple[ProductCategoryCatalogue | None, ProductCategory | None]:
-        for cid in category_ids:
-            if cid in self.by_category_id:
-                return self.by_category_id[cid], self.categories_by_id.get(cid)
-            category = self.categories_by_id.get(cid)
-            matched = self.match_category(category)
-            if matched is not None:
-                return matched, category
-        return None, None
 
 
 def load_category_catalogue_lookup(session: Session) -> CategoryCatalogueLookup:
@@ -86,38 +77,62 @@ def load_category_catalogue_lookup(session: Session) -> CategoryCatalogueLookup:
     return lookup
 
 
+def _order_collection_categories(
+    categories: Iterable[ProductCategory],
+    *,
+    preferred_category_slug: str | None = None,
+    require_published: bool = False,
+    app_collections_only: bool = True,
+) -> list[ProductCategory]:
+    eligible: list[ProductCategory] = []
+    seen_ids: set[UUID] = set()
+    for cat in categories:
+        if cat is None or cat.id in seen_ids:
+            continue
+        if app_collections_only and cat.is_app_collection is False:
+            continue
+        if require_published and not cat.is_published:
+            continue
+        seen_ids.add(cat.id)
+        eligible.append(cat)
+
+    if preferred_category_slug:
+        slug_lower = preferred_category_slug.strip().lower()
+        preferred = [cat for cat in eligible if cat.slug.strip().lower() == slug_lower]
+        others = [cat for cat in eligible if cat.slug.strip().lower() != slug_lower]
+        return [*preferred, *others]
+    return eligible
+
+
 def resolve_product_documents(
     *,
     raw_documents: object,
     category_ids: Iterable[UUID],
     categories: Iterable[ProductCategory] = (),
     lookup: CategoryCatalogueLookup | None = None,
+    preferred_category_slug: str | None = None,
+    require_published_collections: bool = False,
+    app_collections_only: bool = True,
 ) -> tuple[list[dict[str, str]], str | None, Literal["product", "category", "none"]]:
-    """Resolve documents and effective catalog_pdf_url using product-first, category-inherited fallback."""
+    """Resolve documents using product-first, multi-collection brochure inheritance."""
     own_docs = normalize_pdf_documents(raw_documents)
     own_pdf = next((doc["url"] for doc in own_docs if _is_pdf_document(doc)), None)
-    if own_pdf is not None:
-        return own_docs, own_pdf, "product"
+    documents = list(own_docs)
+    seen_urls = {doc["url"] for doc in documents}
+    if lookup:
+        collection_rows = [*categories, *(lookup.categories_by_id[cid] for cid in category_ids if cid in lookup.categories_by_id)]
+        for category in _order_collection_categories(
+            collection_rows, preferred_category_slug=preferred_category_slug,
+            require_published=require_published_collections, app_collections_only=app_collections_only,
+        ):
+            mapping = lookup.match_category(category)
+            if mapping and mapping.catalog_pdf_url not in seen_urls:
+                documents.append({"title": mapping.title or f"{category.name} Catalogue PDF", "url": mapping.catalog_pdf_url})
+                seen_urls.add(mapping.catalog_pdf_url)
     if own_docs:
-        return own_docs, own_docs[0]["url"], "product"
-
-    if lookup is not None:
-        ordered_categories = list(categories)
-        matched_mapping: ProductCategoryCatalogue | None = None
-        matched_category: ProductCategory | None = None
-        for cat in ordered_categories:
-            matched_mapping = lookup.match_category(cat)
-            if matched_mapping is not None:
-                matched_category = cat
-                break
-        if matched_mapping is None:
-            matched_mapping, matched_category = lookup.match_category_ids(category_ids)
-        if matched_mapping is not None and matched_mapping.catalog_pdf_url.startswith("https://"):
-            default_title = f"{matched_category.name} Catalogue PDF" if matched_category else "Category catalogue PDF"
-            title = (matched_mapping.title or default_title).strip()[:180]
-            inherited_doc = {"title": title, "url": matched_mapping.catalog_pdf_url[:1000]}
-            return [inherited_doc], matched_mapping.catalog_pdf_url[:1000], "category"
-
+        return documents, own_pdf or own_docs[0]["url"], "product"
+    if documents:
+        return documents, documents[0]["url"], "category"
     return [], None, "none"
 
 
@@ -149,8 +164,12 @@ def load_category_product_counts(
 def resolve_product_documents_for_model(
     product: Product,
     lookup: CategoryCatalogueLookup | None,
+    *,
+    preferred_category_slug: str | None = None,
+    require_published_collections: bool = False,
+    app_collections_only: bool = True,
 ) -> tuple[list[dict[str, str]], str | None, Literal["product", "category", "none"]]:
-    # Prefer the primary category brochure before secondary memberships.
+    # Prefer the browsed or primary collection brochure first, while including secondary collection PDFs.
     categories: list[ProductCategory] = []
     if product.category is not None:
         categories.append(product.category)
@@ -163,4 +182,7 @@ def resolve_product_documents_for_model(
         category_ids=ordered_ids,
         categories=categories,
         lookup=lookup,
+        preferred_category_slug=preferred_category_slug,
+        require_published_collections=require_published_collections,
+        app_collections_only=app_collections_only,
     )

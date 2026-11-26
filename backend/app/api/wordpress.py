@@ -22,6 +22,7 @@ from app.core.auth import AdminIdentity, require_admin_roles
 from app.core.config import get_settings
 from app.db.session import get_session
 from app.models import AuditEvent, Product, ProductCategory, ProductCategoryCatalogue
+from app.services.catalogue_membership import staging_tag
 from app.services.catalogue_documents import (
     load_category_catalogue_lookup,
     normalize_pdf_documents,
@@ -846,97 +847,6 @@ def _fetch_html_page(url: str, *, site_origin: str, app_env: str) -> str:
     return ""
 
 
-def _extract_category_catalogue_pdf(
-    category_source: dict[str, Any],
-    wp_cat_record: dict[str, Any] | None,
-    media: list[dict[str, Any]],
-    *,
-    site_origin: str = "",
-) -> tuple[str, str] | None:
-    found: dict[str, str] = {}
-    media_by_id = {str(item.get("id")): item for item in media if item.get("id") is not None}
-    wp_id = str(category_source.get("id", ""))
-    cat_name = _plain(category_source.get("name"), 140) or "Category"
-
-    for record in (category_source, wp_cat_record or {}):
-        if not isinstance(record, dict):
-            continue
-        if isinstance(record.get("acf"), dict):
-            for key, val in record["acf"].items():
-                if re.search(r"catalog(?:ue)?|pdf|datasheet|brochure|download|file", str(key), re.IGNORECASE) or (
-                    isinstance(val, str) and ".pdf" in val.lower()
-                ):
-                    _extract_pdf_urls_from_value(
-                        val, f"{cat_name} Catalogue PDF", found, site_origin=site_origin, media_by_id=media_by_id
-                    )
-        for field in record.get("meta_data", []) if isinstance(record.get("meta_data"), list) else []:
-            if not isinstance(field, dict):
-                continue
-            key = str(field.get("key") or field.get("name") or "")
-            raw_val = field.get("value")
-            if re.search(r"catalog(?:ue)?|pdf|datasheet|brochure|download", key, re.IGNORECASE) or (
-                isinstance(raw_val, str) and ".pdf" in raw_val.lower()
-            ):
-                _extract_pdf_urls_from_value(
-                    raw_val, f"{cat_name} Catalogue PDF", found, site_origin=site_origin, media_by_id=media_by_id
-                )
-        if isinstance(record.get("description"), str):
-            _extract_pdf_urls_from_value(
-                record["description"], f"{cat_name} Catalogue PDF", found, site_origin=site_origin, media_by_id=media_by_id
-            )
-
-    for item in media:
-        attachment_parent = item.get("post") if item.get("post") is not None else item.get("parent")
-        if wp_id and str(attachment_parent) == wp_id:
-            mime = str(item.get("mime_type") or "")
-            url = _https_url(item.get("source_url"), site_origin=site_origin)
-            if (mime == "application/pdf" or (url and url.lower().split("?", 1)[0].endswith(".pdf"))) and url and url not in found:
-                title = _plain(_field(item, "title.rendered", f"{cat_name} Catalogue PDF"), 180)
-                found[url] = title or f"{cat_name} Catalogue PDF"
-
-    if not found:
-        return None
-    url, title = next(iter(found.items()))
-    return url, title
-
-
-def _upsert_category_catalogue_mapping(
-    session: Session,
-    *,
-    category: ProductCategory,
-    wp_id: str | None,
-    pdf_url: str,
-    title: str,
-    source: str,
-) -> None:
-    existing = session.scalar(
-        select(ProductCategoryCatalogue).where(
-            (ProductCategoryCatalogue.category_id == category.id)
-            | (ProductCategoryCatalogue.category_key == category.slug)
-        )
-    )
-    if existing is None:
-        session.add(
-            ProductCategoryCatalogue(
-                category_key=category.slug,
-                category_id=category.id,
-                wordpress_category_id=wp_id,
-                title=title[:180],
-                catalog_pdf_url=pdf_url[:1000],
-                source=source,
-            )
-        )
-    else:
-        if existing.source == "cms" and source == "wordpress":
-            return
-        existing.category_key = category.slug
-        existing.category_id = category.id
-        existing.wordpress_category_id = wp_id or existing.wordpress_category_id
-        existing.title = title[:180]
-        existing.catalog_pdf_url = pdf_url[:1000]
-        existing.source = source
-
-
 def _optional_fetch_all(path: str, *, extra_params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if not path or not path.strip():
         return []
@@ -1074,9 +984,6 @@ def sync_woocommerce_catalogue(
 
     categories_by_wp_id: dict[str, ProductCategory] = {}
     category_rows = 0
-    category_catalogues_synced = 0
-    cms_preserved_categories = 0
-    missing_cat_html_targets: list[tuple[ProductCategory, str, str]] = []
 
     for item in source_categories:
         wp_id = str(item.get("id", ""))
@@ -1084,33 +991,30 @@ def sync_woocommerce_catalogue(
         if not wp_id or not name:
             continue
         slug = str(item.get("slug") or f"category-{wp_id}")[:120]
-        raw_wp_count = item.get("count")
-        effective_count = wp_batch_freq_by_wp_id.get(wp_id, 0) or (
-            int(raw_wp_count) if isinstance(raw_wp_count, int) else 0
-        )
-        should_publish_default = slug != "uncategorized" and effective_count > 0
         category = session.scalar(select(ProductCategory).where(ProductCategory.wordpress_source_id == wp_id))
         if category is None:
             slug_match = session.scalar(select(ProductCategory).where(ProductCategory.slug == slug))
-            if slug_match is not None and slug_match.wordpress_source_id in (None, wp_id):
+            if slug_match is not None and not slug_match.is_app_collection and slug_match.wordpress_source_id in (None, wp_id):
                 category = slug_match
         image = _image_url(item.get("image"), site_origin=site_origin)
         description = _plain(item.get("description"), 3000) or None
+        # WordPress categories stay strictly internal reference filter tags; never expose as CMS App Collections.
         if category is None:
             collision = session.scalar(select(ProductCategory).where(ProductCategory.slug == slug))
             if collision is not None:
                 suffix = f"-wp-{wp_id}"
                 slug = f"{slug[:120-len(suffix)]}{suffix}"
             category = ProductCategory(
-                slug=slug, name=name, description=description,
+                slug=slug,
+                name=name,
+                description=description,
                 sort_order=int(item.get("menu_order") or 0),
-                image_url=image, wordpress_source_id=wp_id, is_published=should_publish_default,
+                image_url=image,
+                wordpress_source_id=wp_id,
+                is_app_collection=False,
+                is_published=False,
             )
             session.add(category)
-        elif category.cms_locked:
-            category.wordpress_source_id = wp_id
-            category.image_url = category.image_url or image
-            cms_preserved_categories += 1
         else:
             slug_conflict = session.scalar(select(ProductCategory).where(ProductCategory.slug == slug))
             if slug_conflict is not None and slug_conflict.id != category.id:
@@ -1122,23 +1026,11 @@ def sync_woocommerce_catalogue(
             category.sort_order = int(item.get("menu_order") or 0)
             category.image_url = image or category.image_url
             category.wordpress_source_id = wp_id
-            category.is_published = should_publish_default
+            category.is_app_collection = False
+            category.is_published = False
         session.flush()
         categories_by_wp_id[wp_id] = category
         category_rows += 1
-
-        cat_pdf = _extract_category_catalogue_pdf(item, wp_categories_by_id.get(wp_id), source_media, site_origin=site_origin)
-        if cat_pdf is not None:
-            cat_pdf_url, cat_pdf_title = cat_pdf
-            _upsert_category_catalogue_mapping(
-                session, category=category, wp_id=wp_id, pdf_url=cat_pdf_url, title=cat_pdf_title, source="wordpress"
-            )
-            category_catalogues_synced += 1
-        elif site_origin:
-            cat_link = _https_url(item.get("link") or _field(wp_categories_by_id.get(wp_id, {}), "link"), site_origin=site_origin)
-            if not cat_link:
-                cat_link = f"{site_origin}/product-category/{slug}/"
-            missing_cat_html_targets.append((category, wp_id, cat_link))
 
     batch_freq_by_cat_id = {
         cat.id: wp_batch_freq_by_wp_id.get(wp_cid, 10**6)
@@ -1165,23 +1057,10 @@ def sync_woocommerce_catalogue(
             if isinstance(row, dict) and categories_by_wp_id.get(str(row.get("id"))) is not None
         ))
 
-        product = session.scalar(select(Product).where(Product.wordpress_source_id == wp_id))
+        product = session.scalar(select(Product).where(Product.wordpress_source_id == wp_id).with_for_update())
 
         if not selected_categories:
-            if product is not None and product.categories:
-                selected_categories = list(product.categories)
-            else:
-                fallback_category = session.scalar(select(ProductCategory).where(ProductCategory.slug == "uncategorized"))
-                if fallback_category is None:
-                    fallback_category = ProductCategory(
-                        slug="uncategorized",
-                        name="Uncategorized",
-                        description="Products without a WooCommerce category.",
-                        is_published=False,
-                    )
-                    session.add(fallback_category)
-                    session.flush()
-                selected_categories = [fallback_category]
+            selected_categories = [staging_tag(session)]
         selected_category = _pick_default_primary_category(selected_categories, batch_freq_by_cat_id)
 
         store = store_by_id.get(wp_id, {})
@@ -1256,8 +1135,27 @@ def sync_woocommerce_catalogue(
             created += 1
         else:
             updated += 1
-        if product.category_override:
+        existing_cms_collections: list[ProductCategory] = []
+        seen_cms_ids: set[Any] = set()
+        if product.category is not None and product.category.is_app_collection:
+            existing_cms_collections.append(product.category)
+            seen_cms_ids.add(product.category.id)
+        for existing_cat in list(product.categories):
+            if existing_cat.is_app_collection and existing_cat.id not in seen_cms_ids:
+                existing_cms_collections.append(existing_cat)
+                seen_cms_ids.add(existing_cat.id)
+
+        if existing_cms_collections:
             cms_preserved_category_products += 1
+            product.category_id = (
+                product.category.id
+                if (product.category is not None and product.category.is_app_collection)
+                else existing_cms_collections[0].id
+            )
+            product.categories = [
+                *existing_cms_collections,
+                *[tag for tag in selected_categories if tag.id not in seen_cms_ids],
+            ]
         else:
             product.category_id = selected_category.id
             product.categories = selected_categories
@@ -1293,48 +1191,24 @@ def sync_woocommerce_catalogue(
         if not product.documents_override and not documents and permalink:
             products_needing_html.append((product, permalink))
 
-    # Optional scoped HTML fallback ONLY for items missing PDFs after REST & wp/v2/media.
+    # Optional scoped HTML fallback ONLY for products missing PDFs after REST & wp/v2/media.
     html_fallback_enabled = bool(getattr(settings, "wordpress_html_fallback_enabled", False))
-    if html_fallback_enabled and site_origin and (products_needing_html or missing_cat_html_targets):
+    if html_fallback_enabled and site_origin and products_needing_html:
         deadline = time.monotonic() + 25.0
         with ThreadPoolExecutor(max_workers=10) as pool:
-            cat_futures = {
-                pool.submit(_fetch_html_page, cat_url, site_origin=site_origin, app_env=app_env): (cat_obj, wp_id)
-                for cat_obj, wp_id, cat_url in missing_cat_html_targets
+            prod_futures = {
+                pool.submit(_fetch_html_page, purl, site_origin=site_origin, app_env=app_env): prod_obj
+                for prod_obj, purl in products_needing_html
             }
-            for fut in as_completed(cat_futures):
+            for fut in as_completed(prod_futures):
                 if time.monotonic() > deadline:
                     break
-                cat_obj, wp_id = cat_futures[fut]
+                prod_obj = prod_futures[fut]
                 html_body = fut.result()
-                html_docs = _extract_html_pdf_documents(
-                    html_body, site_origin=site_origin, default_title=f"{cat_obj.name} Catalogue PDF"
-                )
-                if html_docs:
-                    _upsert_category_catalogue_mapping(
-                        session,
-                        category=cat_obj,
-                        wp_id=wp_id,
-                        pdf_url=html_docs[0]["url"],
-                        title=html_docs[0]["title"],
-                        source="wordpress",
-                    )
-                    category_catalogues_synced += 1
-
-            if time.monotonic() < deadline and products_needing_html:
-                prod_futures = {
-                    pool.submit(_fetch_html_page, purl, site_origin=site_origin, app_env=app_env): prod_obj
-                    for prod_obj, purl in products_needing_html
-                }
-                for fut in as_completed(prod_futures):
-                    if time.monotonic() > deadline:
-                        break
-                    prod_obj = prod_futures[fut]
-                    html_body = fut.result()
-                    html_docs = _extract_html_pdf_documents(html_body, site_origin=site_origin, default_title="Product brochure")
-                    if html_docs and not prod_obj.documents_override:
-                        prod_obj.documents = html_docs
-                        matched_by_html += 1
+                html_docs = _extract_html_pdf_documents(html_body, site_origin=site_origin, default_title="Product brochure")
+                if html_docs and not prod_obj.documents_override:
+                    prod_obj.documents = html_docs
+                    matched_by_html += 1
 
     withdrawn = 0
     for product in session.scalars(select(Product).where(Product.wordpress_source_id.is_not(None), Product.is_published.is_(True))):
@@ -1364,10 +1238,8 @@ def sync_woocommerce_catalogue(
             "skipped": skipped,
             "withdrawn": withdrawn,
             "categories": category_rows,
-            "cms_preserved_categories": cms_preserved_categories,
             "cms_preserved_category_products": cms_preserved_category_products,
             "cms_preserved_pdf_products": cms_preserved_pdf_products,
-            "category_catalogues_synced": category_catalogues_synced,
             "documents_linked": resolved_with_pdfs,
             "source_products": len(source_products),
         },
@@ -1397,15 +1269,13 @@ def sync_woocommerce_catalogue(
         "skipped": skipped,
         "withdrawn": withdrawn,
         "categories": category_rows,
-        "cms_preserved_categories": cms_preserved_categories,
         "cms_preserved_category_products": cms_preserved_category_products,
         "cms_preserved_pdf_products": cms_preserved_pdf_products,
-        "category_catalogues_synced": category_catalogues_synced,
         "documents_linked": resolved_with_pdfs,
         "message": (
-            f"Synced {created + updated} WooCommerce products "
-            f"({resolved_with_pdfs} with PDFs linked; {category_catalogues_synced} category catalogues mapped; "
-            f"preserved {cms_preserved_categories} CMS collections and {cms_preserved_category_products} product category overrides)."
+            f"Synced {created + updated} WooCommerce products and {category_rows} internal WP filter tags "
+            f"({resolved_with_pdfs} with PDFs linked; "
+            f"preserved {cms_preserved_category_products} CMS collection assignments)."
         ),
     }
 

@@ -23,6 +23,7 @@ class ProductCategory(Base):
     name: Mapped[str] = mapped_column(String(180))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_app_collection: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     wordpress_source_id: Mapped[str | None] = mapped_column(String(160), nullable=True, unique=True)

@@ -486,7 +486,17 @@ class HomeScreen extends StatelessWidget {
         builder: (context, snapshot) {
           final pageData = snapshot.data != null ? snapshot.data![0] as ProductPageData : null;
           final catList = snapshot.data != null ? snapshot.data![1] as List<ProductCategory> : const <ProductCategory>[];
-          final catById = {for (final cat in catList) cat.id: cat.name};
+          final sourceIds = home['featured_product_category_ids'];
+          final sources = sourceIds is List ? sourceIds.whereType<String>().toList() : <String>[];
+          final catById = {for (final cat in catList) cat.id: cat};
+          ProductCategory? collection(ProductSummary product) {
+            for (final id in sources) {
+              if (product.categoryIds.contains(id) && catById.containsKey(id)) return catById[id];
+            }
+            return catById[product.categoryId];
+          }
+          final singleSource = sources.length == 1 ? catById[sources.first] : null;
+          final heading = home['featured_products_title']?.toString().trim() ?? '';
           final idsRaw = home['featured_product_ids'];
           final ids = idsRaw is List
               ? idsRaw.map((item) => item.toString()).toSet()
@@ -501,9 +511,9 @@ class HomeScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 SectionTitle(
-                  title: 'Featured products',
+                  title: heading.isEmpty ? 'Featured products' : heading,
                   actionLabel: 'View all',
-                  onAction: () => onNavigate(1),
+                  onAction: () => singleSource == null ? onNavigate(1) : onOpenCategory(singleSource.slug),
                 ),
                 const SizedBox(height: 9),
                 if (snapshot.connectionState == ConnectionState.waiting)
@@ -540,9 +550,7 @@ class HomeScreen extends StatelessWidget {
                           ),
                         ),
                         subtitle: Text(
-                          product.summary ??
-                              product.modelCode ??
-                              catById[product.categoryId] ??
+                          collection(product)?.name ?? product.summary ?? product.modelCode ??
                               'Published product',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -555,7 +563,8 @@ class HomeScreen extends StatelessWidget {
                               repository: catalogue,
                               selection: productSelection,
                               product: product,
-                              category: catById[product.categoryId] ?? 'Product',
+                              category: collection(product)?.name ?? 'Product',
+                              categorySlug: collection(product)?.slug,
                             ),
                           ),
                         ),

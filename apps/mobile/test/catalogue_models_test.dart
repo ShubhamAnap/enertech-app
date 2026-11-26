@@ -2,12 +2,27 @@ import 'package:enertech_customer/data/catalogue_models.dart';
 import 'package:enertech_customer/data/catalogue_repository.dart';
 import 'package:enertech_customer/data/product_selection_store.dart';
 import 'package:enertech_customer/screens/products_screen.dart';
+import 'package:enertech_customer/screens/product_detail_screen.dart';
 import 'package:enertech_customer/theme/app_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
 class _FakeProductsRepository extends CatalogueRepository {
   _FakeProductsRepository() : super(baseUrl: '');
+
+  String? detailCollection;
+
+  @override
+  Future<ProductDetails> getProduct(String slug, {String? category}) async {
+    detailCollection = category;
+    return ProductDetails(
+      id: 'p-with-pdf', slug: slug, name: '100 KVA Industrial UPS', categoryId: 'c1',
+      documents: const [
+        ProductDocument(title: 'Secondary collection brochure', url: 'https://example.test/b.pdf'),
+        ProductDocument(title: 'Primary collection brochure', url: 'https://example.test/a.pdf'),
+      ],
+    );
+  }
 
   @override
   Future<List<ProductCategory>> getCategories({int limit = 200, int offset = 0}) async =>
@@ -17,6 +32,8 @@ class _FakeProductsRepository extends CatalogueRepository {
   Future<ProductPageData> getProducts({
     String query = '',
     String? category,
+    List<String> collectionIds = const [],
+    List<String> productIds = const [],
     int limit = 24,
     int offset = 0,
   }) async =>
@@ -77,6 +94,21 @@ void main() {
 
     expect(summary.catalogPdfUrl, 'https://enertechups.com/wp-content/uploads/batteryless-family.pdf');
     expect(summary.documents.single.url, 'https://enertechups.com/wp-content/uploads/batteryless-family.pdf');
+  });
+
+  testWidgets('detail requests the browsed collection and displays both brochures', (tester) async {
+    final repo = _FakeProductsRepository();
+    await tester.pumpWidget(MaterialApp(theme: AppTheme.light, home: ProductDetailScreen(
+      repository: repo, selection: ProductSelectionStore(), category: 'Secondary collection',
+      categorySlug: 'secondary', product: const ProductSummary(
+        id: 'p-with-pdf', name: '100 KVA Industrial UPS', slug: 'ups', categoryId: 'c1',
+      ),
+    )));
+    await tester.pumpAndSettle();
+    expect(repo.detailCollection, 'secondary');
+    await tester.scrollUntilVisible(find.text('Primary collection brochure'), 280);
+    expect(find.text('Secondary collection brochure'), findsOneWidget);
+    expect(find.text('Primary collection brochure'), findsOneWidget);
   });
 
   testWidgets('ProductsScreen displays Brochure PDF badge only for products with PDF', (

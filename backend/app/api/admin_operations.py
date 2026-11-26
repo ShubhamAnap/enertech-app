@@ -1,6 +1,3 @@
-from datetime import datetime
-from uuid import UUID
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import String, cast, or_, select
 from sqlalchemy.exc import IntegrityError

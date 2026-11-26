@@ -1,7 +1,7 @@
 "use client";
 
 import type { User } from "firebase/auth";
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, uploadMedia, type Category, type CategoryCatalogue, type Product } from "@/lib/api";
 
 type ModalCallbacks = {
@@ -220,7 +220,7 @@ export function ProductPdfOverrideModal({
             {target.catalog_pdf_source === "product"
               ? "Product-specific PDF"
               : target.catalog_pdf_source === "category"
-                ? "Inherited from primary collection"
+                ? "Inherited from assigned collections"
                 : "No brochure attached"}
           </div>
           {target.catalog_pdf_url && (
@@ -303,9 +303,9 @@ export function ProductCategoryOverrideModal({
   categories: Category[];
   onClose: () => void;
 }) {
-  const [primaryId, setPrimaryId] = useState(target?.category_id ?? "");
+  const [primaryId, setPrimaryId] = useState(target?.app_collection_ids.includes(target.category_id) ? target.category_id : target?.app_collection_ids[0] ?? "");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
-    () => new Set(target ? [target.category_id, ...(target.category_ids ?? [])] : []),
+    () => new Set(target?.app_collection_ids ?? []),
   );
   const [filterText, setFilterText] = useState("");
   const [saving, setSaving] = useState(false);
@@ -317,7 +317,7 @@ export function ProductCategoryOverrideModal({
     return !q || c.name.toLowerCase().includes(q) || c.slug.toLowerCase().includes(q);
   });
 
-  async function save(syncWithWordpress = false) {
+  async function save() {
     if (!target || !primaryId) return;
     setSaving(true);
     onError("");
@@ -329,14 +329,9 @@ export function ProductCategoryOverrideModal({
         body: JSON.stringify({
           category_id: primaryId,
           category_ids: orderedIds,
-          sync_with_wordpress: syncWithWordpress,
         }),
       });
-      onNotice(
-        syncWithWordpress
-          ? `Restored WordPress collection sync for "${target.name}".`
-          : `Updated collections for "${target.name}" and pinned in CMS.`,
-      );
+      onNotice(`Updated collections for "${target.name}".`);
       onClose();
       await onRefresh();
     } catch (cause) {
@@ -365,7 +360,7 @@ export function ProductCategoryOverrideModal({
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            void save(false);
+            void save();
           }}
           className="mt-3 grid gap-3"
         >
@@ -381,6 +376,7 @@ export function ProductCategoryOverrideModal({
                 setSelectedIds((current) => new Set([...current, nextPrimary]));
               }}
             >
+              <option value="">Choose a collection</option>
               {categories.map((cat) => (
                 <option key={cat.id} value={cat.id}>
                   {cat.name} ({cat.product_count ?? 0}){cat.is_published ? "" : " [Hidden]"}
@@ -430,13 +426,6 @@ export function ProductCategoryOverrideModal({
           </div>
 
           <div className="modal-action flex-wrap justify-between gap-2">
-            <div>
-              {target.wordpress_source_id && target.category_override && (
-                <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={() => void save(true)}>
-                  Allow WP Sync
-                </button>
-              )}
-            </div>
             <div className="flex gap-2">
               <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
               <button className="btn btn-primary" disabled={saving || !primaryId}>Save Collections</button>
@@ -447,4 +436,108 @@ export function ProductCategoryOverrideModal({
       <form method="dialog" className="modal-backdrop"><button onClick={onClose}>close</button></form>
     </dialog>
   );
+}
+
+type AssignmentRow = {
+  id: string;
+  name: string;
+  sku: string | null;
+  checked: boolean;
+  assigned: boolean;
+  tag_ids: string[];
+};
+
+type AssignmentOptions = { products: AssignmentRow[]; tags: Pick<Category, "id" | "name">[] };
+
+export function AssignProductsModal({ target, user, onClose, onRefresh, onNotice }: ModalCallbacks & {
+  target: Category;
+  onClose: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [options, setOptions] = useState<AssignmentOptions | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [tag, setTag] = useState("");
+  const [status, setStatus] = useState("all");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const path = `/admin/catalogue/categories/${target.id}/products`;
+
+  useEffect(() => {
+    dialog.current?.showModal();
+    let active = true;
+    api<AssignmentOptions>(user, path).then((data) => {
+      if (!active) return;
+      setChecked(new Set(data.products.filter((p) => p.checked).map((p) => p.id)));
+      setOptions(data);
+    }).catch((cause) => { if (active) setError(cause.message); });
+    return () => { active = false; };
+  }, [user, path]);
+
+  const query = search.trim().toLowerCase();
+  const matching = options?.products.filter((p) =>
+    (p.name.toLowerCase().includes(query) || p.sku?.toLowerCase().includes(query)) &&
+    (!tag || p.tag_ids.includes(tag)) &&
+    (status === "all" || (status === "member" ? p.checked : !p.assigned))
+  ) ?? [];
+
+  function toggle(ids: string[], value: boolean) {
+    setChecked((current) => {
+      const next = new Set(current);
+      for (const id of ids) { if (value) next.add(id); else next.delete(id); }
+      return next;
+    });
+  }
+
+  async function save() {
+    if (!options || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      await api(user, path, { method: "PUT", body: JSON.stringify({
+        product_ids: [...checked],
+        previous_product_ids: options.products.filter((p) => p.checked).map((p) => p.id),
+      }) });
+      await onRefresh();
+      onNotice(`Saved ${checked.size} products in ${target.name}.`);
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save collection products.");
+      setSaving(false);
+    }
+  }
+
+  return <dialog ref={dialog} className="modal" aria-labelledby="assignment-title" onCancel={(e) => { e.preventDefault(); if (!saving) onClose(); }}>
+    <div className="modal-box max-w-2xl">
+      <h2 className="text-xl font-bold" id="assignment-title">Assign products to {target.name}</h2>
+      {error && <p role="alert" className="alert alert-error mt-3">{error}</p>}
+      {!options && !error && <p role="status">Loading products…</p>}
+      {options && <fieldset disabled={saving} className="mt-4 grid gap-3">
+        <label>Search by name or SKU<input type="search" className="input w-full" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label>WordPress tag<select className="select w-full" value={tag} onChange={(e) => setTag(e.target.value)}>
+            <option value="">All tags</option>{options.tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select></label>
+          <label>Assignment status<select className="select w-full" value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="all">All products</option><option value="member">Already in this collection</option><option value="unassigned">Unassigned to any collection</option>
+          </select></label>
+        </div>
+        <div className="flex items-center gap-2">
+          <button className="btn btn-sm" onClick={() => toggle(matching.map((p) => p.id), true)}>Select all matching ({matching.length})</button>
+          <span role="status">{checked.size} selected</span>
+        </div>
+        <div className="max-h-64 overflow-y-auto">
+          {matching.map((p) => <label key={p.id} className="flex items-center gap-3 py-2">
+            <input type="checkbox" className="checkbox checkbox-sm" checked={checked.has(p.id)} onChange={(e) => toggle([p.id], e.target.checked)} />
+            <span>{p.name}{p.sku && <small className="block">{p.sku}</small>}</span>
+          </label>)}
+          {!matching.length && <p>No matching products.</p>}
+        </div>
+      </fieldset>}
+      <div className="modal-action">
+        <button className="btn" disabled={saving} onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" disabled={!options || saving} onClick={() => void save()}>Save collection products</button>
+      </div>
+    </div>
+  </dialog>;
 }

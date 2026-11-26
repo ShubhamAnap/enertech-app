@@ -57,8 +57,12 @@ class _AppShellState extends State<AppShell> {
     final selected = home is Map && home['featured_product_ids'] is List
         ? (home['featured_product_ids'] as List).map((value) => value.toString()).toList(growable: false)
         : const <String>[];
-    if (selected.isNotEmpty) return _catalogue.getProductsByIds(selected);
-    return _catalogue.getProducts(limit: 300);
+    final sources = home is Map ? home['featured_product_category_ids'] : null;
+    return _catalogue.getProducts(
+      productIds: selected,
+      collectionIds: sources is List ? sources.whereType<String>().toList() : const [],
+      limit: 300,
+    );
   }
 
   @override

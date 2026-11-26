@@ -56,13 +56,17 @@ def readiness(session: Session = Depends(get_session)) -> dict[str, str]:
     return {"status": "ready"}
 
 
+def _visible_app_collection_predicate():
+    return and_(ProductCategory.is_published.is_(True), ProductCategory.is_app_collection.is_(True))
+
+
 @router.get("/catalogue/categories", response_model=list[CategoryPublic], tags=["catalogue"])
 def list_categories(session: Session = Depends(get_session)) -> list[CategoryPublic]:
     require_database()
     counts = load_category_product_counts(session, published_only=True)
     statement = (
         select(ProductCategory)
-        .where(ProductCategory.is_published.is_(True))
+        .where(_visible_app_collection_predicate())
         .order_by(ProductCategory.sort_order, ProductCategory.name)
     )
     categories = [
@@ -83,8 +87,38 @@ def list_categories(session: Session = Depends(get_session)) -> list[CategoryPub
     ]
 
 
-def _public_product_response(product: Product, lookup: CategoryCatalogueLookup) -> ProductPublic:
-    resolved_docs, catalog_pdf_url, _ = resolve_product_documents_for_model(product, lookup)
+def _public_product_response(
+    product: Product,
+    lookup: CategoryCatalogueLookup,
+    *,
+    preferred_category_slug: str | None = None,
+) -> ProductPublic:
+    resolved_docs, catalog_pdf_url, _ = resolve_product_documents_for_model(
+        product,
+        lookup,
+        preferred_category_slug=preferred_category_slug,
+        require_published_collections=True,
+        app_collections_only=True,
+    )
+    visible_collections: list[ProductCategory] = []
+    seen_ids: set[UUID] = set()
+    for candidate in [product.category, *list(product.categories)]:
+        if (
+            candidate is not None
+            and candidate.id not in seen_ids
+            and candidate.is_app_collection
+            and candidate.is_published
+        ):
+            seen_ids.add(candidate.id)
+            visible_collections.append(candidate)
+    if preferred_category_slug:
+        slug_lower = preferred_category_slug.strip().lower()
+        visible_collections = [
+            *[cat for cat in visible_collections if cat.slug.strip().lower() == slug_lower],
+            *[cat for cat in visible_collections if cat.slug.strip().lower() != slug_lower],
+        ]
+    public_category_ids = [cat.id for cat in visible_collections]
+    public_category_id = public_category_ids[0] if public_category_ids else product.category_id
     return ProductPublic(
         id=product.id,
         slug=product.slug,
@@ -104,10 +138,20 @@ def _public_product_response(product: Product, lookup: CategoryCatalogueLookup) 
         stock_quantity=product.stock_quantity,
         documents=[ProductDocument.model_validate(doc) for doc in resolved_docs],
         catalog_pdf_url=catalog_pdf_url,
-        category_id=product.category_id,
-        category_ids=product.category_ids,
+        category_id=public_category_id,
+        category_ids=public_category_ids or [public_category_id],
         updated_at=product.updated_at,
     )
+
+
+def _parse_uuid_list(raw: str, *, max_items: int, detail: str) -> list[UUID]:
+    try:
+        parsed = list(dict.fromkeys(UUID(value.strip()) for value in raw.split(",") if value.strip()))
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=detail) from error
+    if not parsed or len(parsed) > max_items:
+        raise HTTPException(status_code=422, detail=f"Choose between 1 and {max_items} IDs")
+    return parsed
 
 
 @router.get("/catalogue/products", response_model=ProductPage, tags=["catalogue"])
@@ -115,26 +159,27 @@ def list_products(
     session: Session = Depends(get_session),
     q: str | None = Query(default=None, min_length=1, max_length=120),
     category: str | None = Query(default=None, min_length=1, max_length=120),
-    ids: str | None = Query(default=None, min_length=36, max_length=443),
+    category_ids: str | None = Query(default=None, min_length=36, max_length=600),
+    ids: str | None = Query(default=None, min_length=36, max_length=600),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> ProductPage:
     require_database()
+    visible_col = _visible_app_collection_predicate()
     filters = [
         Product.is_published.is_(True),
-        or_(Product.category.has(ProductCategory.is_published.is_(True)), Product.categories.any(ProductCategory.is_published.is_(True))),
+        or_(Product.category.has(visible_col), Product.categories.any(visible_col)),
     ]
     statement = select(Product).options(selectinload(Product.categories), selectinload(Product.category))
     if ids is not None:
-        try:
-            selected_ids = [UUID(value.strip()) for value in ids.split(",")]
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail="Product IDs must be valid UUIDs") from error
-        if not selected_ids or len(selected_ids) > 12:
-            raise HTTPException(status_code=422, detail="Choose between 1 and 12 product IDs")
+        selected_ids = _parse_uuid_list(ids, max_items=12, detail="Product IDs must be valid UUIDs")
         filters.append(Product.id.in_(selected_ids))
+    if category_ids is not None:
+        selected_cat_ids = _parse_uuid_list(category_ids, max_items=12, detail="Collection IDs must be valid UUIDs")
+        matched_col = and_(ProductCategory.id.in_(selected_cat_ids), visible_col)
+        filters.append(or_(Product.category.has(matched_col), Product.categories.any(matched_col)))
     if category:
-        visible_category = and_(ProductCategory.slug == category, ProductCategory.is_published.is_(True))
+        visible_category = and_(ProductCategory.slug == category, visible_col)
         filters.append(or_(Product.category.has(visible_category), Product.categories.any(visible_category)))
     if q:
         search = f"%{q.strip()}%"
@@ -144,7 +189,7 @@ def list_products(
     items = list(session.scalars(filtered.order_by(Product.name).limit(limit).offset(offset)))
     lookup = load_category_catalogue_lookup(session)
     return ProductPage(
-        items=[_public_product_response(item, lookup) for item in items],
+        items=[_public_product_response(item, lookup, preferred_category_slug=category) for item in items],
         total=total,
         limit=limit,
         offset=offset,
@@ -152,19 +197,24 @@ def list_products(
 
 
 @router.get("/catalogue/products/{slug}", response_model=ProductPublic, tags=["catalogue"])
-def get_product(slug: str, session: Session = Depends(get_session)) -> ProductPublic:
+def get_product(
+    slug: str,
+    category: str | None = Query(default=None, min_length=1, max_length=120),
+    session: Session = Depends(get_session),
+) -> ProductPublic:
     require_database()
+    visible_col = _visible_app_collection_predicate()
     statement = (
         select(Product)
         .options(selectinload(Product.categories), selectinload(Product.category))
         .where(
             Product.slug == slug,
             Product.is_published.is_(True),
-            or_(Product.category.has(ProductCategory.is_published.is_(True)), Product.categories.any(ProductCategory.is_published.is_(True))),
+            or_(Product.category.has(visible_col), Product.categories.any(visible_col)),
         )
     )
     product = session.scalar(statement)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     lookup = load_category_catalogue_lookup(session)
-    return _public_product_response(product, lookup)
+    return _public_product_response(product, lookup, preferred_category_slug=category)

@@ -87,11 +87,11 @@ $env:PATH = "$env:JAVA_HOME\bin;$localGitCmd;$env:PATH;$env:WINDIR\System32;$env
 Push-Location $mobileDirectory
 try {
     & $flutter build apk --release @dartDefines
+    if ($LASTEXITCODE -ne 0) { throw "Flutter release build failed with exit code $LASTEXITCODE." }
     $outputApk = Join-Path $mobileDirectory "build\app\outputs\flutter-apk\app-release.apk"
     $targetApk = Join-Path $projectRoot "update.apk"
-    if (Test-Path -LiteralPath $outputApk) {
-        Copy-Item -LiteralPath $outputApk -Destination $targetApk -Force
-        Write-Host "Success: Copied release APK to $targetApk"
-    }
+    if (-not (Test-Path -LiteralPath $outputApk)) { throw "Release APK was not produced." }
+    Copy-Item -LiteralPath $outputApk -Destination $targetApk -Force
+    Write-Host "Success: Copied release APK to $targetApk"
 }
 finally { Pop-Location }

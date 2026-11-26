@@ -22,8 +22,8 @@ class CatalogueRepository {
 
   String get baseUrl => _baseUrl ?? CustomerProfileRepository.effectiveBaseUrl;
 
-  static const String _categoriesCacheKey = 'enertech_cached_categories_v1';
-  static const String _productsCacheKey = 'enertech_cached_products_v1';
+  static const String _categoriesCacheKey = 'enertech_cached_categories_v2';
+  static const String _productsCacheKey = 'enertech_cached_products_v2';
 
   Future<List<ProductCategory>> getCategories() async {
     // 1. Try local cache first for instant opening
@@ -69,6 +69,8 @@ class CatalogueRepository {
   Future<ProductPageData> getProducts({
     String query = '',
     String? category,
+    List<String> collectionIds = const [],
+    List<String> productIds = const [],
     int limit = 24,
     int offset = 0,
   }) async {
@@ -108,6 +110,8 @@ class CatalogueRepository {
         queryParameters: {
           'limit': '$limit',
           'offset': '$offset',
+          if (collectionIds.isNotEmpty) 'category_ids': collectionIds.join(','),
+          if (productIds.isNotEmpty) 'ids': productIds.join(','),
           if (query.trim().isNotEmpty) 'q': query.trim(),
           if (category != null && category.isNotEmpty) 'category': category,
         },
@@ -116,7 +120,7 @@ class CatalogueRepository {
         final freshData = ProductPageData.fromJson(json);
         // A successful empty response must clear old products rather than
         // resurrecting products that were unpublished or filtered out.
-        if (query.trim().isEmpty && (category == null || category.isEmpty)) {
+        if (offset == 0 && productIds.isEmpty && collectionIds.isEmpty && query.trim().isEmpty && (category == null || category.isEmpty)) {
           unawaited(
             SharedPreferences.getInstance().then(
               (p) => p.setString(_productsCacheKey, jsonEncode(json)),
@@ -130,7 +134,9 @@ class CatalogueRepository {
     }
 
     // 3. If network fails or empty, filter cached real products
-    var filtered = cachedProducts.where((p) {
+    final filtered = cachedProducts.where((p) {
+      if (productIds.isNotEmpty && !productIds.contains(p.id)) return false;
+      if (collectionIds.isNotEmpty && !p.categoryIds.any(collectionIds.contains)) return false;
       if (category != null &&
           category.isNotEmpty &&
           (cachedCategoryId == null || !p.categoryIds.contains(cachedCategoryId))) {
@@ -153,13 +159,14 @@ class CatalogueRepository {
     );
   }
 
-  Future<ProductDetails> getProduct(String slug) async {
+  Future<ProductDetails> getProduct(String slug, {String? category}) async {
     try {
       final json = await _getJson(
         '/catalogue/products/${Uri.encodeComponent(slug)}',
+        queryParameters: {if (category != null) 'category': category},
       );
       if (json is Map<String, dynamic>) {
-        unawaited(_syncCachedProductSummary(json));
+        if (category == null) unawaited(_syncCachedProductSummary(json));
         return ProductDetails.fromJson(json);
       }
     } catch (e) {
@@ -219,31 +226,6 @@ class CatalogueRepository {
         );
       }
     } catch (_) {}
-  }
-
-  Future<ProductPageData> getProductsByIds(List<String> ids) async {
-    final selectedIds = ids.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet().take(12).toList();
-    if (selectedIds.isEmpty) return const ProductPageData(items: [], total: 0);
-    try {
-      final json = await _getJson(
-        '/catalogue/products',
-        queryParameters: {'ids': selectedIds.join(','), 'limit': '${selectedIds.length}'},
-      );
-      if (json is Map<String, dynamic>) return ProductPageData.fromJson(json);
-    } catch (e) {
-      debugPrint('CatalogueRepository.getProductsByIds network note: $e');
-    }
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_productsCacheKey);
-      if (raw != null && raw.isNotEmpty) {
-        final cached = ProductPageData.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-        final selected = cached.items.where((product) => selectedIds.contains(product.id)).toList(growable: false);
-        return ProductPageData(items: selected, total: selected.length);
-      }
-    } catch (_) {}
-    return const ProductPageData(items: [], total: 0);
   }
 
   Future<dynamic> _getJson(

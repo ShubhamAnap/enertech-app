@@ -17,11 +17,13 @@ class ProductDetailScreen extends StatefulWidget {
     required this.selection,
     required this.product,
     required this.category,
+    this.categorySlug,
   });
   final CatalogueRepository repository;
   final ProductSelectionStore selection;
   final ProductSummary product;
   final String category;
+  final String? categorySlug;
 
   @override
   State<ProductDetailScreen> createState() => _ProductDetailScreenState();
@@ -29,12 +31,12 @@ class ProductDetailScreen extends StatefulWidget {
 
 class _ProductDetailScreenState extends State<ProductDetailScreen> {
   late Future<ProductDetails> _detail = widget.repository.getProduct(
-    widget.product.slug,
+    widget.product.slug, category: widget.categorySlug,
   );
 
   void _retryDetails() {
     setState(() {
-      _detail = widget.repository.getProduct(widget.product.slug);
+      _detail = widget.repository.getProduct(widget.product.slug, category: widget.categorySlug);
     });
   }
 

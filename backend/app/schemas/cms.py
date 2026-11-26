@@ -13,6 +13,16 @@ class CategoryWrite(BaseModel):
     description: str | None = Field(default=None, max_length=3000)
     sort_order: int = Field(default=0, ge=0, le=10000)
     image_url: HttpUrl | None = None
+    catalog_pdf_url: str | None = Field(default=None, min_length=8, max_length=1000, pattern=r"^https://")
+    catalog_pdf_title: str | None = Field(default=None, max_length=180)
+
+    @field_validator("catalog_pdf_url", "catalog_pdf_title", mode="before")
+    @classmethod
+    def blank_pdf_fields_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
 
 
 class CategoryPatch(BaseModel):
@@ -21,7 +31,16 @@ class CategoryPatch(BaseModel):
     description: str | None = Field(default=None, max_length=3000)
     sort_order: int | None = Field(default=None, ge=0, le=10000)
     image_url: HttpUrl | None = None
-    cms_locked: bool | None = None
+    catalog_pdf_url: str | None = Field(default=None, min_length=8, max_length=1000, pattern=r"^https://")
+    catalog_pdf_title: str | None = Field(default=None, max_length=180)
+
+    @field_validator("catalog_pdf_url", "catalog_pdf_title", mode="before")
+    @classmethod
+    def blank_pdf_fields_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
 
 
 class CategoryAdmin(BaseModel):
@@ -34,6 +53,7 @@ class CategoryAdmin(BaseModel):
     sort_order: int
     image_url: str | None
     wordpress_source_id: str | None
+    is_app_collection: bool = True
     cms_locked: bool = False
     product_count: int = 0
     is_published: bool
@@ -41,6 +61,16 @@ class CategoryAdmin(BaseModel):
     catalog_pdf_url: str | None = None
     catalog_pdf_title: str | None = None
     published_payload: dict[str, object] | None = None
+
+
+class CollectionProductsWrite(BaseModel):
+    product_ids: list[UUID]
+    previous_product_ids: list[UUID] | None = None
+
+    @field_validator("product_ids")
+    @classmethod
+    def dedupe_product_ids(cls, values: list[UUID]) -> list[UUID]:
+        return list(dict.fromkeys(values))
 
 
 class CategoryBulkVisibilityWrite(BaseModel):
@@ -51,7 +81,6 @@ class CategoryBulkVisibilityWrite(BaseModel):
 class ProductCategoryOverrideWrite(BaseModel):
     category_id: UUID
     category_ids: list[UUID] = Field(default_factory=list, max_length=50)
-    sync_with_wordpress: bool = False
 
     @model_validator(mode="after")
     def include_primary_category(self) -> "ProductCategoryOverrideWrite":
@@ -76,11 +105,13 @@ class CatalogueSummaryAdmin(BaseModel):
     products_missing_pdf: int
     products_category_overridden: int
     products_pdf_overridden: int
+    products_unassigned: int = 0
     categories_total: int
     categories_published: int
     categories_hidden: int
     categories_empty: int
     categories_missing_pdf: int
+    wordpress_tags_total: int = 0
     open_service_requests: int
     open_quote_requests: int
     open_contact_inquiries: int
@@ -205,6 +236,9 @@ class ProductAdmin(BaseModel):
     wordpress_source_url: str | None
     category_override: bool = False
     documents_override: bool = False
+    own_documents: list[ProductDocument] = Field(default_factory=list)
+    app_collection_ids: list[UUID] = Field(default_factory=list)
+    wordpress_tag_ids: list[UUID] = Field(default_factory=list)
     is_published: bool
     has_draft: bool
     updated_at: str
@@ -236,6 +270,8 @@ class HomeContent(BaseModel):
     announcement_body: str = Field(default="", max_length=500)
     announcement_visible: bool = False
     featured_category_ids: list[UUID] = Field(default_factory=list, max_length=12)
+    featured_product_category_ids: list[UUID] = Field(default_factory=list, max_length=12)
+    featured_products_title: str = Field(default="Featured products", max_length=80)
     featured_product_ids: list[UUID] = Field(default_factory=list, max_length=12)
     section_order: list[Literal["categories", "featured_products", "requests", "announcements"]] = Field(default_factory=lambda: ["categories", "featured_products", "requests", "announcements"], max_length=4)
     visible_sections: list[Literal["categories", "featured_products", "requests", "announcements"]] = Field(default_factory=lambda: ["categories", "featured_products", "requests", "announcements"], max_length=4)

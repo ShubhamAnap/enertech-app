@@ -288,7 +288,7 @@ def test_catalogue_keeps_all_product_category_memberships(client: TestClient) ->
         session.add(product)
         session.commit()
         product_id = product.id
-        expected_category_ids = {str(primary.id), str(secondary.id), str(hidden.id)}
+        expected_category_ids = {str(primary.id), str(secondary.id)}
 
     primary_result = client.get("/api/v1/catalogue/products?category=multi-primary").json()
     secondary_result = client.get("/api/v1/catalogue/products?category=multi-secondary").json()
@@ -447,7 +447,7 @@ def test_woocommerce_products_keep_content_locked_while_allowing_category_and_pd
     with Session(api_router.engine) as session:
         session.add(AdminAccount(firebase_uid="catalogue-admin", role="admin", is_active=True))
         session.add_all([
-            ProductCategory(id=category_id, slug="wp-read-only", name="WooCommerce collection", wordpress_source_id="wp-category-90", is_published=True),
+            ProductCategory(id=category_id, slug="wp-read-only", name="WooCommerce collection", wordpress_source_id="wp-category-90", is_app_collection=False, is_published=False),
             ProductCategory(id=alt_category_id, slug="cms-curated-cat", name="Curated UPS", is_published=True),
         ])
         session.add(Product(id=product_id, category_id=category_id, slug="wp-read-only-product", name="WooCommerce product", wordpress_source_id="wp-product-90", is_published=True))
@@ -463,16 +463,8 @@ def test_woocommerce_products_keep_content_locked_while_allowing_category_and_pd
     assert client.delete(f"/api/v1/admin/catalogue/categories/{category_id}").status_code == 409
     assert client.patch(f"/api/v1/admin/catalogue/categories/{category_id}", json={"slug": "changed-slug"}).status_code == 409
 
-    # CMS can hide/show and rename WooCommerce categories (locking against future WP sync overwrites).
-    hidden_resp = client.post(f"/api/v1/admin/catalogue/categories/{category_id}/unpublish")
-    assert hidden_resp.status_code == 200
-    assert hidden_resp.json()["is_published"] is False
-    assert hidden_resp.json()["cms_locked"] is True
-
-    renamed_resp = client.patch(f"/api/v1/admin/catalogue/categories/{category_id}", json={"name": "Online UPS Series", "sort_order": 5})
-    assert renamed_resp.status_code == 200
-    assert renamed_resp.json()["name"] == "Online UPS Series"
-    assert renamed_resp.json()["sort_order"] == 5
+    assert client.post(f"/api/v1/admin/catalogue/categories/{category_id}/publish").status_code == 409
+    assert client.patch(f"/api/v1/admin/catalogue/categories/{category_id}", json={"name": "Online UPS"}).status_code == 409
 
     # CMS can reassign a WooCommerce product's collection & PDF independently.
     cat_override = client.put(
@@ -561,6 +553,16 @@ def test_invalid_catalogue_parameters_are_rejected(client: TestClient, query: st
     assert client.get(f"/api/v1/catalogue/products?{query}").status_code == 422
 
 
+def publish_collection(client, slug, product_ids, pdf_url=None):
+    base = "/api/v1/admin/catalogue/categories"
+    result = client.post(base, json={"slug": slug, "name": slug.title(), "catalog_pdf_url": pdf_url})
+    assert result.status_code == 201, result.text
+    cid = result.json()["id"]
+    assert client.put(f"{base}/{cid}/products", json={"product_ids": product_ids}).status_code == 200
+    assert client.post(f"{base}/{cid}/publish").status_code == 200
+    return cid
+
+
 def test_end_to_end_wordpress_sync_category_pdf_inheritance_and_preservation(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -572,7 +574,6 @@ def test_end_to_end_wordpress_sync_category_pdf_inheritance_and_preservation(
         wordpress_store_products_path="wc/store/v1/products",
         wordpress_documents_path="wp/v2/media",
         wordpress_wp_products_path="wp/v2/product",
-        wordpress_wp_categories_path="wp/v2/product_cat",
         wordpress_consumer_key="ck_test",
         wordpress_consumer_secret="cs_test",
         wordpress_source_title_field="name",
@@ -687,12 +688,37 @@ def test_end_to_end_wordpress_sync_category_pdf_inheritance_and_preservation(
     # 1. Run initial sync
     sync1 = client.post("/api/v1/admin/integrations/wordpress/sync")
     assert sync1.status_code == 200, sync1.text
-    assert sync1.json()["category_catalogues_synced"] == 1
-    assert sync1.json()["documents_linked"] == 2
+    assert sync1.json()["documents_linked"] == 1
+    assert client.get("/api/v1/catalogue/categories").json() == []
+    assert client.get("/api/v1/catalogue/products").json()["total"] == 0
+    assert client.get("/api/v1/catalogue/products/batteryless-pro-specific").status_code == 404
+    base = "/api/v1/admin/catalogue"
+    items = client.get(f"{base}/products?assignment=unassigned").json()["items"]
+    ids = [item["id"] for item in items]
+    assert len(ids) == 2
+    family_url = "https://enertechups.com/wp-content/uploads/batteryless-family.pdf"
+    second_url = "https://cdn.example.test/secondary.pdf"
+    primary = publish_collection(client, "curated-batteryless", ids, family_url)
+    secondary = publish_collection(client, "secondary-batteryless", ids, second_url)
+    assert client.get(f"{base}/products?assignment=unassigned").json()["total"] == 0
+    home_path = "/api/v1/admin/app-config/home"
+    config = {"featured_product_category_ids": [secondary], "featured_products_title": "Featured series"}
+    assert client.put(home_path, json=config).status_code == 200
+    assert client.post(f"{home_path}/publish").status_code == 200
+    assert client.get("/api/v1/app/config").json()["home"]["featured_product_category_ids"] == [secondary]
+    tag_id = client.get(f"{base}/categories?kind=wp_tag").json()[0]["id"]
+    for key in ["featured_category_ids", "featured_product_category_ids"]:
+        assert client.put(home_path, json={key: [tag_id]}).status_code == 200
+        assert client.post(f"{home_path}/publish").status_code == 422
+    secondary_path = f"{base}/categories/{secondary}/products"
+    options = client.get(secondary_path).json()
+    assert all(row["checked"] for row in options["products"])
+    assert len(options["tags"]) == 1
+    assert client.put(secondary_path, json={"product_ids": [], "previous_product_ids": []}).status_code == 409
 
     # 2. Verify CMS admin API returns resolved PDFs (inherited + product-specific)
     cms_cats = client.get("/api/v1/admin/catalogue/categories").json()
-    assert cms_cats[0]["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/batteryless-family.pdf"
+    assert {row["catalog_pdf_url"] for row in cms_cats} == {family_url, second_url}
 
     cms_prods = {p["slug"]: p for p in client.get("/api/v1/admin/catalogue/products").json()["items"]}
     assert cms_prods["batteryless-gridless-solar-hybrid-inverter"]["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/batteryless-family.pdf"
@@ -707,6 +733,15 @@ def test_end_to_end_wordpress_sync_category_pdf_inheritance_and_preservation(
     pub_detail = client.get("/api/v1/catalogue/products/batteryless-gridless-solar-hybrid-inverter").json()
     assert pub_detail["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/batteryless-family.pdf"
 
+    assert [d["url"] for d in pub_detail["documents"]] == [family_url, second_url]
+    context = client.get("/api/v1/catalogue/products/batteryless-gridless-solar-hybrid-inverter?category=secondary-batteryless").json()
+    assert context["category_ids"] == [secondary, primary]
+    assert [d["url"] for d in context["documents"]] == [second_url, family_url]
+    page = client.get(f"/api/v1/catalogue/products?category_ids={secondary},{primary}").json()
+    assert page["total"] == 2
+    own = pub_list["batteryless-pro-specific"]
+    assert [d["url"] for d in own["documents"]] == [own["catalog_pdf_url"], family_url, second_url]
+
     # 4. Re-run sync where WP omits PDFs -> existing product & category PDF associations MUST remain intact!
     current_dataset = sync_datasets[1]
     sync2 = client.post("/api/v1/admin/integrations/wordpress/sync")
@@ -719,7 +754,7 @@ def test_end_to_end_wordpress_sync_category_pdf_inheritance_and_preservation(
 
     # 5. CMS admin override on collection PDF persists across future WP syncs
     cms_override = client.put("/api/v1/admin/catalogue/category-catalogues", json={
-        "category_key": "batteryless-solar-hybrid-inverter",
+        "category_key": "curated-batteryless",
         "title": "CMS Curated Batteryless Catalogue",
         "catalog_pdf_url": "https://cdn.example.test/enertech-public/cms/batteryless-v2.pdf",
     })
@@ -729,6 +764,21 @@ def test_end_to_end_wordpress_sync_category_pdf_inheritance_and_preservation(
     pub_cms_override = client.get("/api/v1/catalogue/products/batteryless-gridless-solar-hybrid-inverter").json()
     assert pub_cms_override["catalog_pdf_url"] == "https://cdn.example.test/enertech-public/cms/batteryless-v2.pdf"
     assert pub_cms_override["documents"][0]["title"] == "CMS Curated Batteryless Catalogue"
+
+    assert client.patch(f"{base}/categories/{secondary}", json={"catalog_pdf_url": pub_cms_override["catalog_pdf_url"]}).status_code == 200
+    duplicate = client.get("/api/v1/catalogue/products/batteryless-gridless-solar-hybrid-inverter").json()
+    assert len(duplicate["documents"]) == 1
+    assert client.patch(f"{base}/categories/{secondary}", json={"catalog_pdf_url": second_url}).status_code == 200
+
+    # Removing the primary promotes the secondary. A last removal returns imported products to staging.
+    assert client.put(f"{base}/categories/{primary}/products", json={"product_ids": []}).status_code == 200
+    detail = client.get("/api/v1/catalogue/products/batteryless-gridless-solar-hybrid-inverter").json()
+    assert detail["category_ids"] == [secondary]
+    assert detail["catalog_pdf_url"] == second_url
+    assert client.put(secondary_path, json={"product_ids": []}).status_code == 200
+    assert client.get("/api/v1/catalogue/products").json()["total"] == 0
+    assert client.get(f"{base}/products?assignment=unassigned").json()["total"] == 2
+
 
 
 def test_wordpress_sync_html_fallback_and_telemetry(
@@ -742,7 +792,6 @@ def test_wordpress_sync_html_fallback_and_telemetry(
         wordpress_store_products_path="",
         wordpress_documents_path="wp/v2/media",
         wordpress_wp_products_path="",
-        wordpress_wp_categories_path="",
         wordpress_consumer_key="ck_test",
         wordpress_consumer_secret="cs_test",
         wordpress_source_title_field="name",
@@ -823,7 +872,9 @@ def test_wordpress_sync_html_fallback_and_telemetry(
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["matched_by_html"] == 1
-    assert body["category_catalogues_synced"] == 1
+    assert client.get("/api/v1/admin/catalogue/category-catalogues").json() == []
+    items = client.get("/api/v1/admin/catalogue/products").json()["items"]
+    publish_collection(client, "curated-ups", [p["id"] for p in items])
     assert body["documents_linked"] == 1
 
     ups_detail = client.get("/api/v1/catalogue/products/100-kva-industrial-ups").json()
@@ -845,7 +896,6 @@ def test_woocommerce_store_fallback_preserves_existing_descriptions_and_specs(
         wordpress_store_products_path="wc/store/v1/products",
         wordpress_documents_path="",
         wordpress_wp_products_path="",
-        wordpress_wp_categories_path="",
         wordpress_consumer_key="ck_test",
         wordpress_consumer_secret="cs_test",
         wordpress_source_title_field="name",
@@ -913,6 +963,8 @@ def test_woocommerce_store_fallback_preserves_existing_descriptions_and_specs(
     )
 
     assert client.post("/api/v1/admin/integrations/wordpress/sync").status_code == 200
+    items = client.get("/api/v1/admin/catalogue/products").json()["items"]
+    publish_collection(client, "curated-ups", [p["id"] for p in items])
     use_store_fallback = True
     fallback_resp = client.post("/api/v1/admin/integrations/wordpress/sync")
     assert fallback_resp.status_code == 200, fallback_resp.text
@@ -937,7 +989,6 @@ def test_cms_overrides_and_smart_category_selection_survive_wordpress_sync(
         wordpress_store_products_path="",
         wordpress_documents_path="",
         wordpress_wp_products_path="",
-        wordpress_wp_categories_path="",
         wordpress_consumer_key="ck_test",
         wordpress_consumer_secret="cs_test",
         wordpress_source_title_field="name",
@@ -1002,7 +1053,7 @@ def test_cms_overrides_and_smart_category_selection_survive_wordpress_sync(
     assert first.status_code == 200, first.text
 
     # Empty SEO category imported unpublished and omitted from public catalogue categories.
-    cats_admin = {row["slug"]: row for row in client.get("/api/v1/admin/catalogue/categories").json()}
+    cats_admin = {row["slug"]: row for row in client.get("/api/v1/admin/catalogue/categories?kind=wp_tag").json()}
     assert cats_admin["empty-seo-tag"]["is_published"] is False
     assert cats_admin["empty-seo-tag"]["product_count"] == 0
     public_slugs = {row["slug"] for row in client.get("/api/v1/catalogue/categories").json()}
@@ -1013,42 +1064,34 @@ def test_cms_overrides_and_smart_category_selection_survive_wordpress_sync(
     svs = prods_admin["60-kva-servo-stabilizer"]
     assert svs["category_id"] == cats_admin["servo-stabilizer"]["id"]
 
-    # Hide "power-products" in CMS, attach Collection PDF to "servo-stabilizer", and clear wrong WP PDF on 60 KVA SVS.
-    assert client.post(f"/api/v1/admin/catalogue/categories/{cats_admin['power-products']['id']}/unpublish").status_code == 200
-    assert client.put("/api/v1/admin/catalogue/category-catalogues", json={
-        "category_key": "servo-stabilizer",
-        "category_id": cats_admin["servo-stabilizer"]["id"],
-        "title": "Servo Brochure",
-        "catalog_pdf_url": "https://cdn.example.test/enertech-public/cms/servo.pdf",
-    }).status_code == 200
+    curated = publish_collection(client, "curated-servo", [svs["id"]], "https://cdn.example.test/enertech-public/cms/servo.pdf")
     assert client.delete(f"/api/v1/admin/catalogue/products/{svs['id']}/pdf").status_code == 200
 
     # Re-assign 30 KVA UPS via CMS override + verify bulk category endpoint & summary.
     ups = prods_admin["30-kva-ups-7002"]
     assert client.put(
         f"/api/v1/admin/catalogue/products/{ups['id']}/categories",
-        json={"category_id": cats_admin["servo-stabilizer"]["id"], "category_ids": [cats_admin["servo-stabilizer"]["id"]]},
+        json={"category_id": curated, "category_ids": [curated]},
     ).status_code == 200
 
     # Re-sync from WordPress -> CMS hidden category stays hidden, cleared PDF stays cleared (inheriting servo.pdf), category override stays intact!
     second = client.post("/api/v1/admin/integrations/wordpress/sync")
     assert second.status_code == 200, second.text
-    assert second.json()["cms_preserved_categories"] >= 1
     assert second.json()["cms_preserved_category_products"] >= 1
     assert second.json()["cms_preserved_pdf_products"] >= 1
 
-    cats_after = {row["slug"]: row for row in client.get("/api/v1/admin/catalogue/categories").json()}
+    cats_after = {row["slug"]: row for row in client.get("/api/v1/admin/catalogue/categories?kind=wp_tag").json()}
     assert cats_after["power-products"]["is_published"] is False
     svs_after = client.get("/api/v1/catalogue/products/60-kva-servo-stabilizer").json()
     assert svs_after["catalog_pdf_url"] == "https://cdn.example.test/enertech-public/cms/servo.pdf"
     ups_after = client.get("/api/v1/catalogue/products/30-kva-ups-7002").json()
-    assert ups_after["category_id"] == cats_admin["servo-stabilizer"]["id"]
+    assert ups_after["category_ids"] == [curated]
 
     summary = client.get("/api/v1/admin/catalogue/summary")
     assert summary.status_code == 200
     assert summary.json()["products_total"] == 2
-    assert summary.json()["categories_empty"] == 1
-    assert summary.json()["products_category_overridden"] == 1
+    assert summary.json()["categories_empty"] == 0
+    assert summary.json()["products_category_overridden"] == 2
 
 
 def test_service_request_accepts_attachments(client: TestClient) -> None:

@@ -49,11 +49,11 @@ void main() {
     'offline category filter maps the selected slug to cached category id',
     () async {
       SharedPreferences.setMockInitialValues({
-        'enertech_cached_categories_v1': jsonEncode([
+        'enertech_cached_categories_v2': jsonEncode([
           {'id': 'category-1', 'slug': 'inverters', 'name': 'Inverters'},
           {'id': 'category-2', 'slug': 'batteries', 'name': 'Batteries'},
         ]),
-        'enertech_cached_products_v1': jsonEncode({
+        'enertech_cached_products_v2': jsonEncode({
           'total': 2,
           'items': [
             {
