@@ -68,11 +68,12 @@ foreach ($jdkParent in @(
             ForEach-Object { $_.FullName }
     }
 }
+$cmdExe = Join-Path $env:WINDIR "System32\cmd.exe"
 $java21Directory = $null
 foreach ($javaHomeCandidate in ($javaHomeCandidates | Select-Object -Unique)) {
     $javaExecutable = Join-Path $javaHomeCandidate "bin\java.exe"
     if (-not (Test-Path -LiteralPath $javaExecutable -PathType Leaf)) { continue }
-    $javaVersion = (& $javaExecutable -version 2>&1 | Out-String)
+    $javaVersion = (& $cmdExe /c "`"$javaExecutable`" -version 2>&1" | Out-String)
     if ($javaVersion -match 'version "21(?:\.|"")') {
         $java21Directory = Get-Item -LiteralPath $javaHomeCandidate
         break
@@ -81,7 +82,8 @@ foreach ($javaHomeCandidate in ($javaHomeCandidates | Select-Object -Unique)) {
 if (-not $java21Directory) { throw "Release build requires JDK 21. Install an x64 JDK 21 under $localJdkRoot." }
 $env:JAVA_HOME = $java21Directory.FullName
 $env:ANDROID_HOME = "C:\Users\User\AppData\Local\Android\Sdk"
-$env:PATH = "$env:JAVA_HOME\bin;$env:PATH;$env:WINDIR\System32;$env:WINDIR;$env:WINDIR\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd"
+$localGitCmd = Join-Path $projectRoot ".dev\git\cmd"
+$env:PATH = "$env:JAVA_HOME\bin;$localGitCmd;$env:PATH;$env:WINDIR\System32;$env:WINDIR;$env:WINDIR\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd"
 Push-Location $mobileDirectory
 try {
     & $flutter build apk --release @dartDefines
