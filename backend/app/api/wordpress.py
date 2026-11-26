@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.auth import AdminIdentity, require_admin_roles
 from app.core.config import get_settings
 from app.db.session import get_session
-from app.models import AuditEvent, Product, ProductCategory, ProductCategoryCatalogue
+from app.models import AuditEvent, Product, ProductCategory
 from app.services.catalogue_membership import staging_tag
 from app.services.catalogue_documents import (
     load_category_catalogue_lookup,
