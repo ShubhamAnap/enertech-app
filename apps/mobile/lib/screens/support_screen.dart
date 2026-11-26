@@ -5,8 +5,10 @@ import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 import 'chat_support_screen.dart';
 import 'contact_inquiry_screen.dart';
+import 'faq_article_screen.dart';
 import 'information_library_screen.dart';
 import 'service_request_screen.dart';
+import 'warranty_amc_screen.dart';
 
 class SupportScreen extends StatelessWidget {
   const SupportScreen({
@@ -225,6 +227,16 @@ class SupportScreen extends StatelessWidget {
                   ),
                 ),
               ),
+              _ContactCard(
+                icon: Icons.verified_outlined,
+                title: 'Warranty & AMC',
+                detail: 'Registration and plans',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const WarrantyAmcScreen(),
+                  ),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 10),
@@ -306,14 +318,8 @@ class SupportScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 19),
-          if (hours.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Text(
-                'Support hours: $hours',
-                style: const TextStyle(color: AppColors.muted, fontSize: 11),
-              ),
-            ),
+          const SectionTitle(title: 'FAQs'),
+          const SizedBox(height: 8),
           FutureBuilder<List<Map<String, dynamic>>>(
             future: knowledge,
             builder: (context, faqSnapshot) {
@@ -326,8 +332,6 @@ class SupportScreen extends StatelessWidget {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const SectionTitle(title: 'Common questions'),
-                  const SizedBox(height: 8),
                   ...articles.map(
                     (article) => Padding(
                       padding: const EdgeInsets.only(bottom: 7),
@@ -350,21 +354,10 @@ class SupportScreen extends StatelessWidget {
                             size: 18,
                             color: AppColors.muted,
                           ),
-                          onTap: () => showDialog<void>(
-                            context: context,
-                            builder: (dialogContext) => AlertDialog(
-                              title: Text(
-                                article['title'] as String? ?? 'Support answer',
-                              ),
-                              content: SingleChildScrollView(
-                                child: Text(article['answer'] as String? ?? ''),
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(dialogContext),
-                                  child: const Text('Close'),
-                                ),
-                              ],
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  FaqArticleScreen(article: article),
                             ),
                           ),
                         ),
@@ -375,6 +368,14 @@ class SupportScreen extends StatelessWidget {
               );
             },
           ),
+          if (hours.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                'Support hours: $hours',
+                style: const TextStyle(color: AppColors.muted, fontSize: 11),
+              ),
+            ),
         ],
       );
     },

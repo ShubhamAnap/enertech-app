@@ -184,6 +184,36 @@ class CustomerRequestsRepository {
     return CustomerRequestRecord.fromJson(value as Map<String, dynamic>);
   }
 
+  Future<CustomerRequestRecord> submitWarranty({
+    required String name,
+    required String email,
+    required String mobile,
+    required String serial,
+    required String purchaseDate,
+  }) async {
+    final value = await _request('POST', '/requests/warranty', body: {
+      'customer_name': name,
+      'email': email,
+      'mobile_number': mobile,
+      'serial_number': serial,
+      'purchase_date': purchaseDate,
+    });
+    return CustomerRequestRecord.fromJson(value as Map<String, dynamic>);
+  }
+
+  Future<CustomerRequestRecord> submitAmc({
+    required String serial,
+    required String location,
+    required String purchaseDate,
+  }) async {
+    final value = await _request('POST', '/requests/amc', body: {
+      'serial_number': serial,
+      'location': location,
+      'purchase_date': purchaseDate,
+    });
+    return CustomerRequestRecord.fromJson(value as Map<String, dynamic>);
+  }
+
   Future<void> submitContactInquiry({
     required String name,
     required String phone,

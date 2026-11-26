@@ -7,7 +7,7 @@ import { api, uploadMedia, type AdminAccount, type AuditEvent, type CatalogueSum
 import { getFirebaseAuth } from "@/lib/firebase";
 import { AssignProductsModal, CollectionCataloguePdfModal, CreateCollectionModal, ProductCategoryOverrideModal, ProductPdfOverrideModal } from "./catalogue-modals";
 
-type Section = "overview" | "products" | "categories" | "app_content" | "wordpress" | "service" | "quotes" | "contact_inquiries" | "knowledge" | "customers" | "admins" | "audit";
+type Section = "overview" | "products" | "categories" | "app_content" | "wordpress" | "service" | "quotes" | "warranty" | "amc" | "contact_inquiries" | "knowledge" | "customers" | "admins" | "audit";
 type AppContentTab = "home" | "contacts" | "solution_finder" | "chat" | "brand";
 type WordPressStatus = { configured: boolean; authenticated: boolean; documents_configured: boolean; site: string | null; products_path: string | null; categories_path: string | null; store_api_path: string | null; message: string };
 type WordPressSyncSummary = {
@@ -29,7 +29,7 @@ type WordPressSyncSummary = {
   documents_linked?: number;
   message?: string;
 };
-const sectionNames: Record<Section, string> = { overview: "Overview", products: "Products", categories: "Collections", app_content: "App Content", wordpress: "WordPress Sync", service: "Service requests", quotes: "Quote enquiries", contact_inquiries: "Contact enquiries", knowledge: "FAQs & knowledge", customers: "Customers", admins: "Admin access", audit: "Audit history" };
+const sectionNames: Record<Section, string> = { overview: "Overview", products: "Products", categories: "Collections", app_content: "App Content", wordpress: "WordPress Sync", service: "Service requests", quotes: "Quote enquiries", warranty: "Warranty registrations", amc: "AMC requests", contact_inquiries: "Contact enquiries", knowledge: "FAQs & knowledge", customers: "Customers", admins: "Admin access", audit: "Audit history" };
 const appContentTabs: { key: AppContentTab; title: string }[] = [
   { key: "home", title: "Home screen" },
   { key: "contacts", title: "Contacts & support" },
@@ -38,7 +38,7 @@ const appContentTabs: { key: AppContentTab; title: string }[] = [
   { key: "brand", title: "Brand identity" },
 ];
 const emptyProduct = { category_id: "", category_ids: [] as string[], slug: "", name: "", model_code: "", summary: "", description: "", applications: [] as string[], features: [] as string[], specifications: {} as Record<string, unknown>, image_url: null as string | null, gallery_images: [] as string[], price_minor: null as number | null, currency_code: "INR", currency_minor_unit: 2, stock_status: "unknown" as Product["stock_status"], stock_quantity: null as number | null, documents: [] as Product["documents"], source_reference: "", wordpress_source_id: null as string | null, wordpress_source_url: null as string | null };
-const emptyKnowledge = { slug: "", title: "", category: "General", answer: "", source_reference: "", sort_order: 0 };
+const emptyKnowledge = { slug: "", title: "", category: "General", answer: "", image_urls: [] as string[], video_urls: [] as string[], source_reference: "", sort_order: 0 };
 
 function textValue(value: unknown): string { return value == null ? "" : typeof value === "string" ? value : JSON.stringify(value, null, 2); }
 function humanize(key: string): string { return key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
@@ -92,10 +92,14 @@ const requestTransitions: Record<string, Record<string, string[]>> = {
   service: { submitted: ["in_review", "assigned", "waiting_for_customer", "closed"], in_review: ["assigned", "waiting_for_customer", "resolved", "closed"], assigned: ["in_review", "waiting_for_customer", "resolved", "closed"], waiting_for_customer: ["in_review", "assigned", "resolved", "closed"], resolved: ["closed"], closed: [] },
   quote: { submitted: ["in_review", "assigned", "waiting_for_customer", "quote_preparing", "closed"], in_review: ["assigned", "waiting_for_customer", "quote_preparing", "quote_sent", "closed"], assigned: ["in_review", "waiting_for_customer", "quote_preparing", "quote_sent", "closed"], waiting_for_customer: ["in_review", "assigned", "quote_preparing", "quote_sent", "closed"], quote_preparing: ["waiting_for_customer", "quote_sent", "closed"], quote_sent: ["waiting_for_customer", "closed"], closed: [] },
 };
+requestTransitions.warranty = requestTransitions.service; requestTransitions.amc = requestTransitions.service;
 const requestStatuses: Record<string, string[]> = {
   service: ["submitted", "in_review", "assigned", "waiting_for_customer", "resolved", "closed"],
   quote: ["submitted", "in_review", "assigned", "waiting_for_customer", "quote_preparing", "quote_sent", "closed"],
 };
+
+requestStatuses.warranty = requestStatuses.service; requestStatuses.amc = requestStatuses.service;
+const requestKindForSection = (section: Section): CustomerRequest["kind"] => section === "service" || section === "warranty" || section === "amc" ? section : "quote";
 
 export default function AdminShell({ user, role }: { user: User; role: string }) {
   const [section, setSection] = useState<Section>("overview");
@@ -147,6 +151,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [knowledgeForm, setKnowledgeForm] = useState<typeof emptyKnowledge | KnowledgeArticle>(emptyKnowledge);
   const [editingKnowledge, setEditingKnowledge] = useState<string | null>(null);
   const [showKnowledgeForm, setShowKnowledgeForm] = useState(false);
+  const [knowledgeMediaUploading, setKnowledgeMediaUploading] = useState(false);
   const [wpPreview, setWpPreview] = useState<Array<Record<string, unknown>>>([]);
   const [wpStatus, setWpStatus] = useState<string>("");
   const [lastWpSync, setLastWpSync] = useState<WordPressSyncSummary | null>(null);
@@ -245,7 +250,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     finally { setLoading(false); }
   }, [user]);
 
-  const loadRequests = useCallback(async (kind: "service" | "quote", offset = 0, append = false) => {
+  const loadRequests = useCallback(async (kind: CustomerRequest["kind"], offset = 0, append = false) => {
     setLoading(true); setError("");
     if (!append) setCustomerRequests([]);
     try {
@@ -344,11 +349,11 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     return () => window.clearTimeout(timer);
   }, [section, appContentTab, loadContent, loadCatalogue]);
   useEffect(() => {
-    const timer = window.setTimeout(() => { if (section === "service" || section === "quotes") void loadRequests(section === "service" ? "service" : "quote"); }, 0);
+    const timer = window.setTimeout(() => { if (["service", "quotes", "warranty", "amc"].includes(section)) void loadRequests(requestKindForSection(section)); }, 0);
     return () => window.clearTimeout(timer);
   }, [section, loadRequests]);
   useEffect(() => {
-    const timer = window.setTimeout(() => { if (section === "service" || section === "quotes") void loadAssignableStaff(); }, 0);
+    const timer = window.setTimeout(() => { if (["service", "quotes", "warranty", "amc"].includes(section)) void loadAssignableStaff(); }, 0);
     return () => window.clearTimeout(timer);
   }, [section, loadAssignableStaff]);
   useEffect(() => {
@@ -610,6 +615,20 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save support content."); }
   }
 
+  async function uploadKnowledgeFiles(files: FileList | null, kind: "image_urls" | "video_urls") {
+    if (!files?.length) return;
+    setKnowledgeMediaUploading(true); setError("");
+    try {
+      const urls: string[] = [];
+      for (const file of Array.from(files)) {
+        const result = await uploadMedia(user, file);
+        urls.push(result.url);
+      }
+      setKnowledgeForm((current) => ({ ...current, [kind]: [...current[kind], ...urls] }));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not upload FAQ media."); }
+    finally { setKnowledgeMediaUploading(false); }
+  }
+
   async function submitAdmin(event: FormEvent) {
     event.preventDefault(); setError(""); setNotice("");
     try {
@@ -716,6 +735,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       {summary && summary.open_quote_requests > 0 && <span className="badge badge-xs badge-warning font-mono">{summary.open_quote_requests}</span>}
                     </button>
                   </li>
+                  <li><button className={section === "warranty" ? "active" : ""} onClick={() => { setSection("warranty"); setMenuOpen(false); }}><AdminIcon name="service" /><span className="flex-1">Warranty registrations</span></button></li>
+                  <li><button className={section === "amc" ? "active" : ""} onClick={() => { setSection("amc"); setMenuOpen(false); }}><AdminIcon name="service" /><span className="flex-1">AMC requests</span></button></li>
                   <li>
                     <button className={section === "contact_inquiries" ? "active" : ""} onClick={() => { setSection("contact_inquiries"); setMenuOpen(false); }}>
                       <AdminIcon name="inquiry" />
@@ -1695,7 +1716,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
             )}
 
             {/* CUSTOMER REQUESTS & ENQUIRIES */}
-            {(section === "service" || section === "quotes") && (
+            {(["service", "quotes", "warranty", "amc"].includes(section)) && (
               <>
                 <div className="page-heading">
                   <div>
@@ -1703,7 +1724,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                     <h1>{title}</h1>
                     <p>Review customer submissions, update status, and share a progress note.</p>
                   </div>
-                  <button className="btn btn-outline" onClick={() => void loadRequests(section === "service" ? "service" : "quote")}>Refresh</button>
+                  <button className="btn btn-outline" onClick={() => void loadRequests(requestKindForSection(section))}>Refresh</button>
                 </div>
                 <div className="card panel mb-3">
                   <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_15rem]">
@@ -1713,9 +1734,9 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                     </label>
                     <label className="form-control gap-1">
                       <span className="label-text">Filter by status</span>
-                      <select className="select select-bordered select-sm" value={requestStatuses[section === "service" ? "service" : "quote"].includes(requestStatusFilter) ? requestStatusFilter : "all"} onChange={(event) => setRequestStatusFilter(event.target.value)}>
+                      <select className="select select-bordered select-sm" value={requestStatuses[requestKindForSection(section)].includes(requestStatusFilter) ? requestStatusFilter : "all"} onChange={(event) => setRequestStatusFilter(event.target.value)}>
                         <option value="all">All statuses</option>
-                        {requestStatuses[section === "service" ? "service" : "quote"].map((status) => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}
+                        {requestStatuses[requestKindForSection(section)].map((status) => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}
                       </select>
                     </label>
                   </div>
@@ -1730,7 +1751,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       <article className="card panel" key={record.id}>
                         <header className="panel-head">
                           <div>
-                            <h2>{record.kind === "service" ? String(record.payload.product_model ?? "Service request") : String(record.payload.application ?? "Quote enquiry")}</h2>
+                            <h2>{record.kind === "service" ? String(record.payload.product_model ?? "Service request") : record.kind === "warranty" ? "Warranty registration" : record.kind === "amc" ? "AMC request" : String(record.payload.application ?? "Quote enquiry")}</h2>
                             <p>{record.customer_name ? `${record.customer_name} · ` : ""}{record.customer_email} · {new Date(record.created_at).toLocaleString()}</p>
                           </div>
                           <span className="badge badge-info">{record.status.replaceAll("_", " ")}</span>
@@ -1744,9 +1765,10 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                               {record.customer_location && <span>{record.customer_location}</span>}
                               {!record.customer_phone && <span>{record.customer_email}</span>}
                             </div>
-                            <strong className="text-base-content">{record.kind === "service" ? "Problem Description" : "Equipment or Load"}</strong>
-                            <p className="whitespace-pre-wrap">{String(record.payload.description ?? record.payload.equipment_or_load ?? "")}</p>
-                            <p className="mt-2">Location: {String(record.payload.service_location ?? record.payload.project_location ?? "Not provided")}</p>
+                            {(record.kind === "warranty" || record.kind === "amc") && <div><p>Serial number: {String(record.payload.serial_number ?? "")}</p><p>Date of purchase: {String(record.payload.purchase_date ?? "")}</p>{record.kind === "warranty" ? <><p>Customer: {String(record.payload.customer_name ?? "")}</p><p>Email: {String(record.payload.email ?? "")}</p><p>Mobile: {String(record.payload.mobile_number ?? "")}</p></> : <p>Location: {String(record.payload.location ?? "")}</p>}</div>}
+                            {record.kind !== "warranty" && record.kind !== "amc" && <strong className="text-base-content">{record.kind === "service" ? "Problem Description" : "Equipment or Load"}</strong>}
+                            {record.kind !== "warranty" && record.kind !== "amc" && <p className="whitespace-pre-wrap">{String(record.payload.description ?? record.payload.equipment_or_load ?? "")}</p>}
+                            {record.kind !== "warranty" && record.kind !== "amc" && <p className="mt-2">Location: {String(record.payload.service_location ?? record.payload.project_location ?? "Not provided")}</p>}
                             <p>Reference: {record.id.slice(0, 8).toUpperCase()}</p>
                             {record.kind === "service" && Array.isArray(record.payload.attachments) && record.payload.attachments.length > 0 && (
                               <div className="mt-3">
@@ -1803,7 +1825,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   )}
                   {requestsHasMore && (
                     <div className="flex justify-center p-2">
-                      <button className="btn btn-outline btn-sm" disabled={loading} onClick={() => void loadRequests(section === "service" ? "service" : "quote", customerRequests.length, true)}>
+                      <button className="btn btn-outline btn-sm" disabled={loading} onClick={() => void loadRequests(requestKindForSection(section), customerRequests.length, true)}>
                         {loading ? <span className="loading loading-spinner loading-sm" /> : "Load older requests"}
                       </button>
                     </div>
@@ -2091,6 +2113,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                             <td>
                               <div className="flex gap-1">
                                 <button className="btn btn-ghost btn-xs" onClick={() => { setKnowledgeForm(article); setEditingKnowledge(article.id); setShowKnowledgeForm(true); }}>Edit</button>
+                                {(!article.is_published || article.has_draft) && <button className="btn btn-primary btn-xs" onClick={async () => { setError(""); try { await api(user, `/admin/knowledge/${article.id}/publish`, { method: "POST" }); setNotice("FAQ published to the app."); await loadKnowledge(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not publish FAQ."); } }}>Publish</button>}
                                 {article.is_published && (role === "admin" || role === "super_admin") && <button className="btn btn-ghost btn-xs text-error" onClick={() => void unpublish(`/admin/knowledge/${article.id}/unpublish`)}>Unpublish</button>}
                               </div>
                             </td>
@@ -2397,9 +2420,11 @@ export default function AdminShell({ user, role }: { user: User; role: string })
               <label className="form-control gap-1"><span className="label-text">URL Slug</span><input className="input input-bordered" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" value={knowledgeForm.slug} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, slug: e.target.value })} /></label>
               <label className="form-control gap-1"><span className="label-text">Category</span><input className="input input-bordered" required minLength={2} maxLength={100} value={knowledgeForm.category} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, category: e.target.value })} /></label>
               <label className="form-control gap-1"><span className="label-text">Sort order</span><input className="input input-bordered" type="number" min="0" max="10000" value={knowledgeForm.sort_order} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, sort_order: Number(e.target.value) })} /></label>
-              <label className="form-control gap-1 sm:col-span-2"><span className="label-text">Answer</span><textarea className="textarea textarea-bordered min-h-36" required minLength={10} value={knowledgeForm.answer} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, answer: e.target.value })} /></label>
+              <label className="form-control gap-1 sm:col-span-2"><span className="label-text">Formatted answer</span><textarea className="textarea textarea-bordered min-h-36" required minLength={10} value={knowledgeForm.answer} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, answer: e.target.value })} /><span className="label-text-alt">Use # Heading, - bullet, and **bold** in the answer.</span></label>
+              <label className="form-control gap-1 sm:col-span-2"><span className="label-text">Images</span><textarea className="textarea textarea-bordered min-h-20" placeholder="One HTTPS image URL per line" value={knowledgeForm.image_urls.join("\n")} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, image_urls: e.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} /><input className="file-input file-input-bordered file-input-sm w-full" type="file" accept="image/png,image/jpeg,image/webp" multiple disabled={knowledgeMediaUploading} aria-label="Upload FAQ images" onChange={(e) => { void uploadKnowledgeFiles(e.target.files, "image_urls"); e.target.value = ""; }} /></label>
+              <label className="form-control gap-1 sm:col-span-2"><span className="label-text">Video links and direct videos</span><textarea className="textarea textarea-bordered min-h-20" placeholder="One HTTPS video URL per line, including YouTube links or MP4/WebM files" value={knowledgeForm.video_urls.join("\n")} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, video_urls: e.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} /><input className="file-input file-input-bordered file-input-sm w-full" type="file" accept="video/mp4,video/webm" disabled={knowledgeMediaUploading} aria-label="Upload FAQ video" onChange={(e) => { void uploadKnowledgeFiles(e.target.files, "video_urls"); e.target.value = ""; }} /><span className="label-text-alt">Uploaded MP4/WebM videos play in the app. Other video links open in the video provider.</span></label>
               <label className="form-control gap-1 sm:col-span-2"><span className="label-text">Approved source reference</span><input className="input input-bordered" required maxLength={1000} placeholder="Document URL, manual section, or approval reference" value={knowledgeForm.source_reference ?? ""} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, source_reference: e.target.value })} /><span className="label-text-alt">A source reference is required to publish this answer.</span></label>
-              <div className="modal-action sm:col-span-2"><button type="button" className="btn btn-ghost" onClick={() => setShowKnowledgeForm(false)}>Close</button><button className="btn btn-primary">Save Answer</button></div>
+              <div className="modal-action sm:col-span-2"><button type="button" className="btn btn-ghost" onClick={() => setShowKnowledgeForm(false)}>Close</button><button className="btn btn-primary" disabled={knowledgeMediaUploading}>Save Answer</button></div>
             </form>
           </div>
           <form method="dialog" className="modal-backdrop"><button onClick={() => setShowKnowledgeForm(false)}>close</button></form>

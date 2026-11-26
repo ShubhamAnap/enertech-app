@@ -1,4 +1,5 @@
 import re
+from datetime import date
 from typing import Literal
 from uuid import UUID
 
@@ -385,9 +386,37 @@ class QuoteRequestWrite(BaseModel):
     expected_timeline: str = Field(default="", max_length=300)
 
 
+class WarrantyRequestWrite(BaseModel):
+    customer_name: str = Field(min_length=2, max_length=180)
+    email: str = Field(min_length=3, max_length=254)
+    mobile_number: str = Field(min_length=7, max_length=30)
+    purchase_date: date
+    serial_number: str = Field(min_length=1, max_length=120)
+
+    @field_validator("purchase_date")
+    @classmethod
+    def purchase_date_not_future(cls, value: date) -> date:
+        if value > date.today():
+            raise ValueError("Purchase date cannot be in the future")
+        return value
+
+
+class AmcRequestWrite(BaseModel):
+    serial_number: str = Field(min_length=1, max_length=120)
+    location: str = Field(min_length=2, max_length=500)
+    purchase_date: date
+
+    @field_validator("purchase_date")
+    @classmethod
+    def purchase_date_not_future(cls, value: date) -> date:
+        if value > date.today():
+            raise ValueError("Purchase date cannot be in the future")
+        return value
+
+
 class CustomerRequestPublic(BaseModel):
     id: UUID
-    kind: Literal["service", "quote"]
+    kind: Literal["service", "quote", "warranty", "amc"]
     status: str
     payload: dict[str, object]
     resolution_note: str | None
@@ -416,8 +445,17 @@ class KnowledgeWrite(BaseModel):
     title: str = Field(min_length=3, max_length=220)
     category: str = Field(default="General", min_length=2, max_length=100)
     answer: str = Field(min_length=10, max_length=12000)
+    image_urls: list[HttpUrl] = Field(default_factory=list, max_length=10)
+    video_urls: list[HttpUrl] = Field(default_factory=list, max_length=10)
     source_reference: str | None = Field(default=None, max_length=1000)
     sort_order: int = Field(default=0, ge=0, le=10000)
+
+    @field_validator("image_urls", "video_urls")
+    @classmethod
+    def https_media_urls(cls, urls: list[HttpUrl]) -> list[HttpUrl]:
+        if any(url.scheme != "https" for url in urls):
+            raise ValueError("FAQ media URLs must use HTTPS")
+        return urls
 
 
 class KnowledgePatch(BaseModel):
@@ -425,8 +463,17 @@ class KnowledgePatch(BaseModel):
     title: str | None = Field(default=None, min_length=3, max_length=220)
     category: str | None = Field(default=None, min_length=2, max_length=100)
     answer: str | None = Field(default=None, min_length=10, max_length=12000)
+    image_urls: list[HttpUrl] | None = Field(default=None, max_length=10)
+    video_urls: list[HttpUrl] | None = Field(default=None, max_length=10)
     source_reference: str | None = Field(default=None, max_length=1000)
     sort_order: int | None = Field(default=None, ge=0, le=10000)
+
+    @field_validator("image_urls", "video_urls")
+    @classmethod
+    def https_media_urls(cls, urls: list[HttpUrl] | None) -> list[HttpUrl] | None:
+        if urls is not None and any(url.scheme != "https" for url in urls):
+            raise ValueError("FAQ media URLs must use HTTPS")
+        return urls
 
 
 class KnowledgeAdmin(BaseModel):
@@ -435,6 +482,8 @@ class KnowledgeAdmin(BaseModel):
     title: str
     category: str
     answer: str
+    image_urls: list[HttpUrl] = Field(default_factory=list)
+    video_urls: list[HttpUrl] = Field(default_factory=list)
     source_reference: str | None
     sort_order: int
     is_published: bool
@@ -449,6 +498,8 @@ class KnowledgePublic(BaseModel):
     title: str
     category: str
     answer: str
+    image_urls: list[HttpUrl] = Field(default_factory=list)
+    video_urls: list[HttpUrl] = Field(default_factory=list)
 
 
 class CustomerProfileWrite(BaseModel):

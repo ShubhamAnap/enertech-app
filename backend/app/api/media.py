@@ -16,6 +16,7 @@ ROUTER_TAG = "media library"
 router = APIRouter(prefix="/admin/media", tags=["media library"])
 EDITOR_ROLES = ("content_editor", "admin", "super_admin")
 MAX_FILE_BYTES = 20 * 1024 * 1024
+MAX_FAQ_VIDEO_BYTES = 50 * 1024 * 1024
 ALLOWED_SIGNATURES = {
     "image/jpeg": (b"\xff\xd8\xff", ".jpg"),
     "image/png": (b"\x89PNG\r\n\x1a\n", ".png"),
@@ -106,7 +107,7 @@ async def upload_media_bytes_to_storage(
         "cache-control": "31536000",
     }
     try:
-        async with httpx.AsyncClient(timeout=25, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=120 if content_type.startswith("video/") else 25, follow_redirects=False) as client:
             response = await client.put(storage_url, content=payload, headers=upload_headers)
             if response.status_code in (400, 404) and "bucket" in (response.text or "").lower():
                 if await _ensure_public_bucket(
@@ -182,5 +183,31 @@ async def upload_media(
         folder="cms",
         actor_uid=admin.uid,
         audit_action="media.uploaded",
+        session=session,
+    )
+
+
+@router.post("/upload-video", response_model=MediaAssetPublic, status_code=status.HTTP_201_CREATED)
+async def upload_faq_video(
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles(*EDITOR_ROLES)),
+) -> MediaAssetPublic:
+    payload = await file.read(MAX_FAQ_VIDEO_BYTES + 1)
+    if not payload or len(payload) > MAX_FAQ_VIDEO_BYTES:
+        raise HTTPException(status_code=413, detail="Choose a video smaller than 50 MB")
+    if len(payload) >= 12 and payload[4:8] == b"ftyp":
+        content_type, extension = "video/mp4", ".mp4"
+    elif payload.startswith(b"\x1a\x45\xdf\xa3"):
+        content_type, extension = "video/webm", ".webm"
+    else:
+        raise HTTPException(status_code=415, detail="Upload an MP4 or WebM video")
+    return await upload_media_bytes_to_storage(
+        payload=payload,
+        content_type=content_type,
+        extension=extension,
+        folder="cms/faq-videos",
+        actor_uid=admin.uid,
+        audit_action="media.faq_video_uploaded",
         session=session,
     )

@@ -96,6 +96,43 @@ def test_media_upload_accepts_pdf_brochures(monkeypatch) -> None:
     assert str(result.url).endswith(".pdf")
 
 
+def test_faq_video_upload_accepts_mp4_and_rejects_other_files(monkeypatch) -> None:
+    settings = SimpleNamespace(
+        supabase_url="https://storage.example.test",
+        supabase_service_role_key="test-server-key",
+        supabase_public_media_bucket="enertech-public",
+    )
+    monkeypatch.setattr(media, "get_settings", lambda: settings)
+
+    class AsyncStorageClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, url, **kwargs):
+            return httpx.Response(200, json={"public": True})
+
+        async def put(self, url, **kwargs):
+            assert "/cms/faq-videos/" in url
+            assert kwargs["headers"]["Content-Type"] == "video/mp4"
+            return httpx.Response(200)
+
+    monkeypatch.setattr(media.httpx, "AsyncClient", lambda **_kwargs: AsyncStorageClient())
+    admin = AdminIdentity(uid="cms-admin", email="admin@example.test", name="CMS Admin", role="super_admin")
+    payload = b"\x00\x00\x00\x18ftypisomvideo"
+    result = asyncio.run(media.upload_faq_video(
+        UploadFile(filename="faq.mp4", file=BytesIO(payload)), session=Mock(), admin=admin,
+    ))
+    assert result.content_type == "video/mp4"
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(media.upload_faq_video(
+            UploadFile(filename="fake.mp4", file=BytesIO(b"not a video")), session=Mock(), admin=admin,
+        ))
+    assert error.value.status_code == 415
+
+
 def test_media_upload_auto_creates_missing_public_bucket(monkeypatch) -> None:
     settings = SimpleNamespace(
         supabase_url="https://storage.example.test",

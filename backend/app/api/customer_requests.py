@@ -10,7 +10,7 @@ from app.core.auth import AdminIdentity, Identity, get_current_identity, require
 from app.core.config import get_settings
 from app.db.session import get_session
 from app.models import AdminAccount, AuditEvent, CustomerRequest, ContactInquiry, CustomerProfile
-from app.schemas.cms import CustomerRequestAdmin, CustomerRequestPublic, CustomerRequestUpdate, QuoteRequestWrite, ServiceRequestWrite, ContactInquiryCreate, ContactInquiryAdmin, ContactInquiryUpdate
+from app.schemas.cms import CustomerRequestAdmin, CustomerRequestPublic, CustomerRequestUpdate, QuoteRequestWrite, ServiceRequestWrite, WarrantyRequestWrite, AmcRequestWrite, ContactInquiryCreate, ContactInquiryAdmin, ContactInquiryUpdate
 
 router = APIRouter(tags=["customer requests"])
 ADMIN_ROLES = ("content_editor", "admin", "super_admin")
@@ -34,6 +34,8 @@ REQUEST_TRANSITIONS = {
         "closed": set(),
     },
 }
+for request_kind in ("warranty", "amc"):
+    REQUEST_TRANSITIONS[request_kind] = REQUEST_TRANSITIONS["service"]
 CONTACT_INQUIRY_STATUSES = {"new", "in_progress", "waiting_for_customer", "resolved", "closed"}
 MAX_CUSTOMER_REQUESTS_PER_HOUR = 10
 MAX_SERVICE_PHOTO_BYTES = 10 * 1024 * 1024
@@ -147,6 +149,27 @@ def submit_quote_request(
     return _create("quote", body.model_dump(mode="json"), identity, session)
 
 
+@router.post("/requests/warranty", status_code=status.HTTP_201_CREATED, response_model=CustomerRequestPublic)
+def submit_warranty_request(
+    body: WarrantyRequestWrite,
+    identity: Identity = Depends(get_current_identity),
+    session: Session = Depends(get_session),
+) -> CustomerRequestPublic:
+    _require_verified_customer(identity)
+    if body.email.strip().lower() != (identity.email or "").strip().lower():
+        raise HTTPException(status_code=422, detail="Use the email address of your signed-in account")
+    return _create("warranty", body.model_dump(mode="json"), identity, session)
+
+
+@router.post("/requests/amc", status_code=status.HTTP_201_CREATED, response_model=CustomerRequestPublic)
+def submit_amc_request(
+    body: AmcRequestWrite,
+    identity: Identity = Depends(get_current_identity),
+    session: Session = Depends(get_session),
+) -> CustomerRequestPublic:
+    return _create("amc", body.model_dump(mode="json"), identity, session)
+
+
 @router.get("/requests", response_model=list[CustomerRequestPublic])
 def my_requests(
     limit: int = Query(default=30, ge=1, le=100),
@@ -163,7 +186,7 @@ def my_requests(
 
 @router.get("/admin/requests", response_model=list[CustomerRequestAdmin])
 def admin_requests(
-    kind: str | None = Query(default=None, pattern="^(service|quote)$"),
+    kind: str | None = Query(default=None, pattern="^(service|quote|warranty|amc)$"),
     status_filter: str | None = Query(default=None, alias="status", pattern="^(submitted|in_review|assigned|waiting_for_customer|resolved|quote_preparing|quote_sent|closed)$"),
     q: str | None = Query(default=None, max_length=200),
     limit: int = Query(default=50, ge=1, le=100),

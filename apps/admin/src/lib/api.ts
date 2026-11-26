@@ -86,9 +86,9 @@ export type CategoryCatalogue = {
 
 export type ProductPage = { items: Product[]; total: number; limit: number; offset: number };
 export type ContentEnvelope = { key: string; draft_payload: Record<string, unknown>; published_payload: Record<string, unknown> | null; draft_revision: number; published_revision: number | null; updated_at: string | null };
-export type CustomerRequest = { id: string; kind: "service" | "quote"; status: string; payload: Record<string, unknown>; resolution_note: string | null; created_at: string; updated_at: string; customer_uid: string; customer_email: string; assigned_to: string | null; customer_name?: string | null; customer_phone?: string | null; customer_company?: string | null; customer_location?: string | null };
+export type CustomerRequest = { id: string; kind: "service" | "quote" | "warranty" | "amc"; status: string; payload: Record<string, unknown>; resolution_note: string | null; created_at: string; updated_at: string; customer_uid: string; customer_email: string; assigned_to: string | null; customer_name?: string | null; customer_phone?: string | null; customer_company?: string | null; customer_location?: string | null };
 export type ContactInquiry = { id: string; name: string; email: string; phone: string; company_name: string | null; subject: string | null; message: string; inquiry_type: string; status: "new" | "in_progress" | "waiting_for_customer" | "resolved" | "closed"; notes: string | null; created_at: string; updated_at: string };
-export type KnowledgeArticle = { id: string; slug: string; title: string; category: string; answer: string; source_reference: string | null; sort_order: number; is_published: boolean; has_draft: boolean };
+export type KnowledgeArticle = { id: string; slug: string; title: string; category: string; answer: string; image_urls: string[]; video_urls: string[]; source_reference: string | null; sort_order: number; is_published: boolean; has_draft: boolean };
 export type CustomerProfile = { id: string; customer_type: "end_user" | "reseller" | "epc" | "distributor"; name: string; mobile_number: string; email: string; location: string; company_name: string | null; gst_number: string | null; created_at: string; updated_at: string };
 export type AdminAccount = { id: string; firebase_uid: string; email: string | null; display_name: string | null; role: "content_editor" | "admin" | "super_admin"; is_active: boolean; created_at: string; updated_at: string };
 export type AuditEvent = { id: string; actor_uid: string; action: string; entity_type: string; entity_id: string; change_summary: Record<string, unknown>; created_at: string };
@@ -135,7 +135,8 @@ export async function api<T>(user: User, path: string, init: RequestInit = {}): 
 export async function uploadMedia(user: User, file: File): Promise<AdminMediaAsset> {
   const body = new FormData();
   body.append("file", file);
-  const response = await fetch(`${getEffectiveApiBaseUrl()}/admin/media/upload`, {
+  const path = file.type.startsWith("video/") ? "upload-video" : "upload";
+  const response = await fetch(`${getEffectiveApiBaseUrl()}/admin/media/${path}`, {
     method: "POST",
     headers: { Accept: "application/json", Authorization: `Bearer ${await user.getIdToken()}` },
     body,

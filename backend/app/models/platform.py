@@ -71,6 +71,8 @@ class KnowledgeArticle(Base):
     title: Mapped[str] = mapped_column(String(220))
     category: Mapped[str] = mapped_column(String(100), default="General", index=True)
     answer: Mapped[str] = mapped_column(String(12000))
+    image_urls: Mapped[list] = mapped_column(JSON, default=list)
+    video_urls: Mapped[list] = mapped_column(JSON, default=list)
     source_reference: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

@@ -1156,3 +1156,65 @@ def test_service_request_accepts_attachments(client: TestClient) -> None:
     assert res.json()["payload"]["attachments"] == [
         "https://storage.example.test/enertech-public/service-requests/customer-img/photo1.jpg"
     ]
+
+
+def test_warranty_and_amc_requests_are_owned_and_reviewable(client: TestClient) -> None:
+    customer = Identity("customer-coverage", "coverage@example.test", "Customer", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: customer
+    warranty = {
+        "customer_name": "Customer One", "email": "coverage@example.test",
+        "mobile_number": "+919876543210", "purchase_date": "2026-01-15",
+        "serial_number": "ET-100-001",
+    }
+    assert client.post("/api/v1/requests/warranty", json={**warranty, "email": "other@example.test"}).status_code == 422
+    created_warranty = client.post("/api/v1/requests/warranty", json=warranty)
+    assert created_warranty.status_code == 201, created_warranty.text
+    assert created_warranty.json()["kind"] == "warranty"
+    assert created_warranty.json()["status"] == "submitted"
+    assert client.post("/api/v1/requests/amc", json={
+        "serial_number": "ET-100-001", "location": "Pune", "purchase_date": "2026-01-15",
+    }).status_code == 201
+    assert [row["kind"] for row in client.get("/api/v1/requests").json()] == ["amc", "warranty"]
+
+    other = Identity("other-customer", "other@example.test", "Other", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: other
+    assert client.get("/api/v1/requests").json() == []
+
+    admin = Identity("coverage-admin", "admin@example.test", "Admin", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: admin
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="coverage-admin", role="super_admin", is_active=True))
+        session.commit()
+    rows = client.get("/api/v1/admin/requests?kind=warranty")
+    assert rows.status_code == 200
+    assert len(rows.json()) == 1
+    changed = client.patch(f"/api/v1/admin/requests/{created_warranty.json()['id']}", json={"status": "in_review"})
+    assert changed.status_code == 200, changed.text
+
+
+def test_faq_media_stays_in_draft_until_published(client: TestClient) -> None:
+    admin = Identity("faq-admin", "faq@example.test", "Admin", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: admin
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="faq-admin", role="super_admin", is_active=True))
+        session.commit()
+    body = {
+        "slug": "battery-care", "title": "How do I care for batteries?",
+        "category": "Maintenance", "answer": "# Battery care\n- Check **terminals** monthly.",
+        "image_urls": ["https://cdn.example.test/faq/battery.jpg"],
+        "video_urls": ["https://cdn.example.test/faq/battery.mp4", "https://www.youtube.com/watch?v=example"],
+        "source_reference": "Approved service guide", "sort_order": 1,
+    }
+    created = client.post("/api/v1/admin/knowledge", json=body)
+    assert created.status_code == 201, created.text
+    article_id = created.json()["id"]
+    assert client.get("/api/v1/knowledge").json() == []
+    published = client.post(f"/api/v1/admin/knowledge/{article_id}/publish")
+    assert published.status_code == 200, published.text
+    public = client.get("/api/v1/knowledge").json()[0]
+    assert public["image_urls"] == body["image_urls"]
+    assert public["video_urls"] == body["video_urls"]
+    assert client.patch(f"/api/v1/admin/knowledge/{article_id}", json={"answer": "# Updated care\n- New advice"}).status_code == 200
+    assert client.get("/api/v1/knowledge").json()[0]["answer"] == body["answer"]
+    assert client.post(f"/api/v1/admin/knowledge/{article_id}/publish").status_code == 200
+    assert client.get("/api/v1/knowledge").json()[0]["answer"] == "# Updated care\n- New advice"

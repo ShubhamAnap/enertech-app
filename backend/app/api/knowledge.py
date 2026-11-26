@@ -20,6 +20,8 @@ def _payload(article: KnowledgeArticle) -> dict[str, object]:
         "title": article.title,
         "category": article.category,
         "answer": article.answer,
+        "image_urls": article.image_urls or [],
+        "video_urls": article.video_urls or [],
         "source_reference": article.source_reference,
         "sort_order": article.sort_order,
     }
@@ -30,6 +32,7 @@ def _response(article: KnowledgeArticle) -> KnowledgeAdmin:
     return KnowledgeAdmin(
         id=article.id, slug=str(values["slug"]), title=str(values["title"]),
         category=str(values.get("category", "General")), answer=str(values["answer"]),
+        image_urls=values.get("image_urls") or [], video_urls=values.get("video_urls") or [],
         source_reference=values.get("source_reference"), sort_order=int(values.get("sort_order", 0)),
         is_published=article.is_published, has_draft=article.draft_data is not None,
     )

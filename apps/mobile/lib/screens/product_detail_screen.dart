@@ -8,7 +8,6 @@ import '../data/product_selection_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 import 'solution_finder_screen.dart';
-import 'product_compare_screen.dart';
 
 class ProductDetailScreen extends StatefulWidget {
   const ProductDetailScreen({
@@ -437,49 +436,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               message: 'Product details are shown from the published catalogue. Confirm technical suitability with EnerTech before making a selection.',
             ),
             const SizedBox(height: 20),
-            ValueListenableBuilder<List<ProductSummary>>(
-              valueListenable: widget.selection.products,
-              builder: (context, selected, _) => OutlinedButton.icon(
-                onPressed: () {
-                  final current = product ?? widget.product;
-                  if (widget.selection.contains(current.id)) {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => ProductCompareScreen(
-                          repository: widget.repository,
-                          selection: widget.selection,
-                        ),
-                      ),
-                    );
-                  } else if (widget.selection.add(current)) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Added to your comparison and quote list.',
-                        ),
-                      ),
-                    );
-                  } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Compare up to four products at a time.'),
-                      ),
-                    );
-                  }
-                },
-                icon: Icon(
-                  widget.selection.contains(product?.id ?? widget.product.id)
-                      ? Icons.compare_arrows_rounded
-                      : Icons.add_rounded,
-                ),
-                label: Text(
-                  widget.selection.contains(product?.id ?? widget.product.id)
-                      ? 'Open comparison list (${selected.length})'
-                      : 'Add to compare / quote list',
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
             FilledButton.icon(
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(

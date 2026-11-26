@@ -88,7 +88,7 @@ class _RequestsScreenState extends State<RequestsScreen> {
         ),
         const SizedBox(height: 5),
         const Text(
-          'Enquiries, quotations, and service updates in one place.',
+          'Enquiries, service, warranty and AMC updates in one place.',
           style: TextStyle(color: AppColors.muted, fontSize: 13),
         ),
         const SizedBox(height: 18),
@@ -139,8 +139,7 @@ class _RequestsScreenState extends State<RequestsScreen> {
                 child: EmptyState(
                   icon: Icons.inbox_outlined,
                   title: 'No requests yet',
-                  message:
-                      'Start a guided enquiry or service request. Your updates will appear here.',
+                  message: 'Start a guided enquiry or service request. Your updates will appear here.',
                   actionLabel: 'Find a solution',
                   onAction: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
@@ -165,9 +164,12 @@ class _RequestsScreenState extends State<RequestsScreen> {
                               children: [
                                 Expanded(
                                   child: Text(
-                                    request.kind == 'service'
-                                        ? 'Service request'
-                                        : 'Quote enquiry',
+                                    switch (request.kind) {
+                                      'service' => 'Service request',
+                                      'warranty' => 'Warranty registration',
+                                      'amc' => 'AMC request',
+                                      _ => 'Quote enquiry',
+                                    },
                                     style: const TextStyle(
                                       color: AppColors.ink,
                                       fontWeight: FontWeight.w700,
@@ -227,7 +229,8 @@ class _RequestsScreenState extends State<RequestsScreen> {
                                             height: 58,
                                             color: const Color(0xFFF2F6FA),
                                             child: const Icon(
-                                              Icons.image_not_supported_outlined,
+                                              Icons
+                                                  .image_not_supported_outlined,
                                               size: 20,
                                             ),
                                           ),
@@ -289,11 +292,19 @@ class _RequestsScreenState extends State<RequestsScreen> {
       .replaceAll('_', ' ')
       .split(' ')
       .map(
-        (word) =>
-            word.isEmpty ? word : '${word[0].toUpperCase()}${word.substring(1)}',
+        (word) => word.isEmpty
+            ? word
+            : '${word[0].toUpperCase()}${word.substring(1)}',
       )
       .join(' ');
-  String _summary(CustomerRequestRecord request) => request.kind == 'service'
-      ? '${request.payload['product_model'] ?? 'Equipment'} · ${request.payload['problem_category'] ?? 'Issue'}'
-      : '${request.payload['application'] ?? 'Application'} · Qty ${request.payload['quantity'] ?? 1}';
+  String _summary(CustomerRequestRecord request) => switch (request.kind) {
+    'service' =>
+      '${request.payload['product_model'] ?? 'Equipment'} · ${request.payload['problem_category'] ?? 'Issue'}',
+    'warranty' =>
+      'Serial ${request.payload['serial_number'] ?? '—'} · Purchased ${request.payload['purchase_date'] ?? '—'}',
+    'amc' =>
+      'Serial ${request.payload['serial_number'] ?? '—'} · ${request.payload['location'] ?? 'Location'}',
+    _ =>
+      '${request.payload['application'] ?? 'Application'} · Qty ${request.payload['quantity'] ?? 1}',
+  };
 }
