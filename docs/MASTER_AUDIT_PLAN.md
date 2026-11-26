@@ -1,186 +1,147 @@
-# EnerTech App + CMS Master Audit Plan
+# EnerTech App, CMS and API Audit Plan
 
-Audit date: 2026-11-25
+Audit snapshot: 2026-11-25
+Scope: Flutter Android app, Next.js CMS, FastAPI service, database/migrations, WooCommerce integration and Coolify deployment.
 
-Scope: Flutter customer app, Next.js CMS, FastAPI API, database/migrations, and WooCommerce synchronization.
-Status: Source-level audit and fixes are ongoing. Production acceptance is not complete. The latest CMS screen proves Firebase sign-in and API role verification are now responding, but the signed-in UID is not authorized as a CMS administrator. The database URL is no longer the current visible failure; provision the first super-admin UID as described below.
+## Executive audit result
 
-## Current delivery snapshot — 2026-11-25
+The project has a working source-level foundation and most of the core catalogue/content/request flows are implemented. It is **not production-verified end to end**. At audit time, requests to `api.enertechups.cloud` and `cms.enertechups.cloud` time out from this workstation. The connected Android device is visible to ADB, but source and screenshots do not prove a fresh live API request or CMS publish reached that device.
 
-- The local CMS now reports catalogue-load failures instead of treating them as an empty collection list, ignores stale catalogue responses, and can page through every product/collection from the Home featured selectors. Catalogue request size matches the API's 500-item maximum.
-- Current local verification (2026-11-25): CMS ESLint and TypeScript `--noEmit` pass; Flutter `analyze` and all six Flutter tests pass. A Next.js production build passed earlier using placeholder public Firebase/API values, not live services.
-- Backend verification: 23 pytest checks passed in this turn; Alembic offline SQL compiled through `c42e17b3d906`. Live database migration completion is not visible from the local workspace.
-- The workspace `update.apk` is 63,615,191 bytes, matches `apps/mobile/build/app/outputs/flutter-apk/app-release.apk`, and was built at 2026-11-25 10:58 local time. Its v2 signature verifies; signer SHA-1 is `78:EE:94:85:3B:3F:86:21:74:9C:51:3D:9F:02:31:E6:B1:58:09:37` and SHA-256 is `dff76233c8810fc2b05a6c80688223abf2ab4f2f395356f7ece2dca080696080`.
-- The current bundled `google-services.json` targets Firebase project `enertech-ups`, package `com.enertech.enertech_customer`, and includes the same Android SHA-1 as the APK signer. This closes the fingerprint/config mismatch at source level, but live Google sign-in and device installation remain unverified.
-- The local mobile source reads the Flutter `--dart-define` Firebase values passed by `infra/build-mobile.ps1`, fixing the setup-incomplete path when the `.env` asset is absent. The current APK includes the updated source as of the 10:58 build; GitHub `main` does not yet include the uncommitted worktree edits.
-- The user updated `SUPABASE_DATABASE_URL`. The first subsequent API startup failure was a duplicate `contact_inquiries` table because the supplied Supabase schema already contained it. A migration-safe fix was pushed as `c1c0691ba9dbef629a7ab0af89a083ceea8b437f`; the subsequent CMS screen now shows **CMS access not granted**, which is an authorization denial rather than an API/database connectivity error.
-- Current CMS gate: the API only grants CMS access to an active `admin_accounts` record or a UID in `BOOTSTRAP_SUPER_ADMIN_UIDS`. The project owner must bootstrap the exact Firebase UID used to sign in, deploy the API, create an active super-admin record in CMS, then remove the temporary bootstrap UID and redeploy.
-- The latest browser certificate screenshot shows a Let's Encrypt certificate issued to `cms.enertechups.cloud`, with a validity period of 2026-11-25 through 2027-02-23. Chrome still labels the page `Not secure`; the screenshot alone does not prove the browser used HTTPS or trusted the full certificate chain. Open `https://cms.enertechups.cloud` explicitly and inspect the browser's certificate/connection details; verify the API hostname too.
-- GitHub `main` is at `c1c0691ba9dbef629a7ab0af89a083ceea8b437f`. The local checkout has two local commits and uncommitted edits based on its previous remote ref; reconcile it selectively before publishing local work.
+The product screenshot provided on 25 November shows a product with published catalogue data (title/specifications/price/stock) and an empty product `documents` collection. The app’s “No product brochure or datasheet…” state is therefore consistent with the payload it received. It does not establish that the CMS connection is broken. A PDF can only appear when its public HTTPS URL is present in that product’s API `documents` field. A fresh production API record and the corresponding WordPress product response could not be inspected because both hosts time out from this workstation.
 
-## Account-owner actions required
+## Current evidence and limits
 
-These steps require access to the user's Firebase, Supabase, or Coolify accounts; do not share secrets in chat.
+| Area | Evidence observed | What it proves / does not prove |
+|---|---|---|
+| Source checkout | Branch `main`, local `HEAD` `417c97c`; GitHub `main` `44a2d0c`; 103 commits between recorded `origin/main` and GitHub head; many local changes | Local and remote source have diverged substantially. Do not push the local tree wholesale; reconcile targeted changes against current GitHub files. `git fetch` cannot authenticate in this workstation. |
+| Phone | ADB device `Y5XCTWHIBEE6VKFM` is connected; signed app version `0.1.2` (code 3) reinstalled; label `ENERTECH`; launch intent delivered | Package install and launch work. It does not prove sign-in or live API flows. |
+| API/CMS domains | HTTPS API readiness/catalogue and CMS requests timed out from this workstation | Live checks are currently unavailable from here; this is not proof the services are down globally. |
+| Screenshot product | Product has price, stock, and structured specs; document state is empty | Catalogue data is present in the app’s current view. This product record lacks a PDF link. It does not identify whether the PDF is missing in WordPress or was dropped during sync. |
+| CMS/API code | The API has authenticated admin, catalogue, content, request, contact inquiry, knowledge, upload, audit, and WordPress routes | These workflows exist in source. They need live authorization, database, and end-to-end confirmation. |
+| WordPress document importer | Local source now checks downloads, configured custom fields, named Woo meta fields, PDF links in descriptions, and attached PDF media; sync reports `documents_linked`. Local source also uses Store API when REST keys are absent. | Python syntax compiles, but backend tests could not run because the available Python environment lacks FastAPI and pytest. Production source data and sync are still unverified. |
 
-1. **Bootstrap CMS access:** in Firebase Console → EnerTech Ups → Authentication → Users, copy the UID for the exact account used at `cms.enertechups.cloud`. In Coolify, set `BOOTSTRAP_SUPER_ADMIN_UIDS` to that UID (comma-separated only if needed), save, and redeploy the API. In CMS → Admin access, create/verify that UID as an active `super_admin`, then remove the temporary UID from Coolify and redeploy the API. Never share service-account or database secrets in chat.
-2. **Verify Google sign-in live:** the current bundled Firebase configuration contains the current APK's release SHA-1, but the project owner must confirm Google and Email/Password providers are enabled, the web client ID is configured, and the release APK can complete sign-in on a real device.
-3. **Confirm secure domain access:** open `https://cms.enertechups.cloud` and `https://api.enertechups.cloud` directly. If either still shows a browser security warning, inspect its certificate details and Coolify domain mapping before accepting production traffic.
+## User-visible data flow
 
-## Priority 0 — Security and data correctness
+```text
+WordPress / WooCommerce
+       │ product, category, price, stock, image, documents
+       ▼
+FastAPI sync ──► Supabase/PostgreSQL catalogue
+       │                        │
+       │ CMS reads/writes       ├── published product/category API ──► Mobile app
+       │                        └── published app-config/FAQ API ─────► Mobile app
+       ▼
+Next.js CMS
+```
 
-- [x] Remove browser-side Supabase service-role access and route CMS operations only through the authenticated API.
-- [x] Require the API to verify an active admin role before showing the CMS; never infer admin access from Firebase sign-in alone.
-- [ ] Rotate/revoke the service-role key that was committed in the former CMS bundle. Removing it from source does not invalidate copies in existing builds, browser caches, or Git history.
-- [ ] Rotate/revoke the previously committed chat-widget key as well. Treat any key sent to the app as public and replace a private provider key with a provider-designated embed key.
-- [x] Make the catalogue response schema accept the same maximum page size as the API and CMS (`limit=500`).
-- [x] Treat a successful empty catalogue response as authoritative so an old on-device cache cannot resurrect unpublished/deleted catalogue items.
-- [x] Scope customer profile caches by Firebase UID, clear stale cached profiles after an authoritative empty response, and require API confirmation before marking onboarding/profile edits saved.
-- [x] Stop treating failed quote/service POSTs as successful local submissions; only API-confirmed requests appear in My Requests, preventing cross-account offline-request leakage.
-- [x] Preserve deliberately cleared values and empty arrays when CMS product drafts are returned.
-- [x] Avoid returning exception details and internal configuration in generic API 500 responses.
-- [x] Avoid returning database connection exception details in API 503 responses; return a retryable generic message while retaining server-side logs.
-- [x] Keep Supabase Storage uploads asynchronous so a slow media request does not block the API event loop.
-- [x] Ignore stale CMS role-verification responses after a Firebase account changes; abort the previous check before accepting another account's role.
-- [x] Treat bootstrap-super-admin UIDs as initial access only; once an admin record exists, stored roles and deactivation control access.
-- [x] Keep the CMS container port internal so public requests enter through Coolify's HTTPS proxy instead of bypassing it on port 3000.
-- [x] Validate featured collection/product references when publishing Home content.
-- [x] Keep featured-product publishing consistent across catalogue pagination: limit CMS selections to the API's 12-item schema and let the app fetch selected, published IDs directly, even when those products fall beyond the first catalogue page.
-- [x] Remove the fixed demo customer credentials and offline-auth bypass from the app entry screen.
-- [x] Remove the duplicate account-tab sign-in/sign-up form so all customer authentication goes through the verified-email entry flow.
-- [x] Remove embedded Firebase defaults from app and CMS clients and remove the app's emulator API fallback; missing configuration now blocks account access instead of silently using fallback settings.
-- [x] Require a verified customer email before onboarding and add resend/check-verification actions.
-- [x] Put common profile fields before business-only company/GST fields, improve sign-in autofill/keyboard actions, and validate phone/GST data in both the app and API.
-- [x] Keep sign-in and onboarding forms within readable widths, give each input a visible label and purpose-specific keyboard, and place business fields after role selection only for reseller/EPC/distributor accounts; apply the same role-dependent order in profile editing and hide business data rows from end-user account summaries.
-- [x] Remove the hard-coded Google OAuth client ID fallback; Google sign-in now requires the app build's configured client ID.
-- [x] Reject local or non-HTTPS API endpoints when building a release APK.
-- [x] Replace fabricated dashboard totals, fake time-series charts, and hard-coded "connected" integration badges with explicit live snapshot counts and setup guidance.
-- [x] Make product stock status honest when the source has not provided availability; both CMS views distinguish unknown, out-of-stock, in-stock, and backorder.
-- [x] Remove an invented 22% MRP calculation and a static "Default Sales Channel" label from product listings; show source, published price, and reported stock instead.
-- [x] Add product/collection image upload, product gallery URLs, multiple document editing, and stock quantity input to the CMS.
-- [x] Use sized Next.js image components for CMS product previews and replace decorative emoji with accessible SVG icons.
-- [x] Test customer-request owner scoping, content-editor restrictions, closed-request transitions, media size limits, and contact-inquiry limits keyed by Firebase UID against isolated SQLite.
-- [x] Rate-limit quote and service submissions together to ten per verified Firebase account per hour; index customer UID plus request creation time and test the cross-endpoint cap.
-- [ ] Verify Firebase token revocation and execute/rollback schema migrations against staging Supabase; verify live storage policies and role boundaries there.
-- [x] Register the current APK signer SHA-1 in Firebase and refresh the bundled Google services configuration; the current config fingerprint matches the verified APK signer. Live Google sign-in still needs device verification.
+WordPress-owned products and categories are intentionally read-only in the CMS; they must be corrected in WordPress and synced. CMS-authored products/categories can be edited and published in the CMS. This ownership split must be explained in the product editor so staff know where a missing PDF has to be added.
 
-## Priority 1 — Core CMS content workflows
+## Coverage audit
 
-- [x] Replace manual UUID entry for featured collections/products with published-item selectors.
-- [x] Add the approved source reference, category, and sort order fields to the knowledge editor; publishing otherwise always failed for new answers.
-- [x] Add image upload and preview controls to product and collection editors, plus gallery and multiple-document editing.
-- [x] Add contact-inquiry triage to the CMS with search, status updates, internal notes, and audit history.
-- [x] Build a customer contact form and connect it to the CMS queue; require verified sign-in, use the verified account email, validate phone/type, and cap submissions at five per hour per Firebase UID. Migration backfills older rows from their audit events; a case-insensitive email fallback covers unmatched legacy rows.
-- [x] Add Alembic migrations for contact inquiry storage and its customer UID lookup index; keep old records nullable and rate-limit new inquiries by stable Firebase UID.
-- [x] Add collection-aware Home navigation so choosing a featured collection opens that collection in the catalogue.
-- [x] Add explicit publish/unpublish actions to app content, products, collections, and support articles where the role/API permits.
-- [x] Add a readable per-field draft-versus-published comparison to app-content, product, and collection editors; catalogue APIs expose current published columns alongside the editable draft.
-- [x] Add server-side catalogue search and load-more pagination for products and collections, including the CMS selectors.
-- [x] Add pagination for customer, quote/service request, knowledge, and audit queues; customer, request, knowledge, audit, and contact enquiry views now expose load-more controls backed by offset APIs.
-- [x] Add audit search, entity-type filtering, stable ordering, and CSV export for loaded filtered rows.
-- [ ] Confirm WooCommerce field mappings against the live store; the implementation is configurable, but this workspace has no live credentials or verified field mapping.
+### Mobile app
 
-## Priority 1 — CMS-to-app content parity
+| Capability | Source status | Outstanding work |
+|---|---|---|
+| Login, email/password, Google sign-in, profile onboarding | Implemented in source | Verify release Firebase providers, OAuth client and sign-in on the connected phone. |
+| Five primary tabs: Home, Products, Requests, Support, Account | Implemented | Device QA at normal text size, landscape, smaller screens and large accessibility text. |
+| Home hero, search text, intent copy, announcements, featured products/collections, section order/visibility | CMS config fields are consumed | Verify publish-to-phone refresh and stale/error handling; ensure featured selectors cannot select hidden/unpublished records. |
+| Product catalogue, category/collection filtering, search, compare | Implemented against published catalogue API | Verify category memberships after live sync and correct behavior with >500 products, pagination, empty and offline states. |
+| Product details, price/stock, specifications, product documents | Implemented against API product payload | Current screenshot product has no documents. Validate PDF source path, sync, CMS card/editor, app detail and document library with a known product. Product detail toolbar now displays the product name in the local source; phone verification is pending. |
+| Quote/RFQ via Solution Finder and product/compare paths | Request submission/list API is implemented | Attachments are absent; there is no quotation issue/revision/view/acceptance model or customer quotation document screen. |
+| Service request and tracking | API submit and customer request list/status text implemented | Photo upload is explicitly disabled; request detail/timeline, appointment and resolution activity model are absent. |
+| Company contact details, support contacts, FAQ, brand logo, support icon, chat config | Published CMS fields are consumed in source | The Home screen now uses the supplied transparent EnerTech wordmark and Android launcher uses the same mark with the requested `ENERTECH` label. Verify each setting on live app; external chat script/provider contract and direct-contact configuration need real credentials/URLs. |
+| Information library | Reads HTTPS documents from published products | Library only contains documents that were imported. No separate CMS-managed manuals/document library or private-file access exists. |
+| Registered equipment, warranty/AMC, notifications, addresses, privacy/settings | Not implemented | Add only after company policy/source-of-truth decisions; remove/avoid UI claims that imply availability. |
 
-- [x] Load the CMS-approved HTTPS chat embed URL inside the customer app, preserve direct contacts when enabled, consume welcome/fallback/handoff settings, and restrict embed/handoff links to server-allowlisted HTTPS hosts. The provider script/key protocol still needs its exact integration contract.
-- [x] Remove hard-coded company phone/email values from app screens; contact data comes from the published CMS configuration.
-- [x] Connect published product document links to a searchable mobile information library; private media/manual access control is still open.
-- [ ] Decide and implement notification behavior; the former home bell now opens My Requests, and there is no notification backend.
-- [x] Remove the unimplemented equipment-registration entry point and the incorrectly categorized warranty/AMC link; the current document model cannot verify coverage type.
-- [ ] Implement registered-equipment ownership, warranty/AMC coverage, and service-history workflows after the business rules and source of truth are confirmed.
-- [x] Wire the contact-inquiry API to the customer support form and admin queue with verified-account and database-backed rate limits; quote and service requests also share a database-backed ten-per-hour account cap.
-- [x] Confirm every editable Home/Solution Finder/Contact/Brand/FAQ field is visible in the app and document unsupported fields; Home search/intent copy and Brand support icon are now connected, while provider-specific chat scripting remains external.
-- [x] Trace the current CMS app-content fields against their mobile consumers; the concrete gaps are listed below.
+### CMS and administration
 
-## Priority 2 — Operational and product completeness
+| Module | Source status | Outstanding work |
+|---|---|---|
+| Overview | Real catalogue/customer/request counts; explicit notice that sales/order/time-series analytics are not connected | Do not present unsupported metrics as operational analytics; add actionable queues only when backed by APIs. |
+| Products and collections | Search, pagination, table/grid, draft/publish, media, documents; WooCommerce records are read-only | Improve product image/name/price/PDF scanability and collection badge wrapping. Add a direct, clear route to WordPress for source-owned records. |
+| WordPress import/sync | Status, preview, import as drafts, sync and counters exist | Live API base URL, credentials, routes, field mappings, sync result, deletions/withdrawals and document count require production verification. |
+| Home screen | Hero, CTA, featured items, announcement, ordering and visibility are editable | Preview should represent the customer app; verify every field and empty/default behavior after publish. |
+| Contact details / brand / Solution Finder / chat / FAQ | Draft/publish editors exist and corresponding app consumers exist | Verify field-by-field on device. Confirm business-approved contact values, hosting/chat allowlist, sources and FAQ correctness. |
+| Quote enquiries and service requests | Search/filter, customer profile fields, assignment, status transitions, notes, pagination | This is enquiry/ticket triage, not quotation management. Add request detail/activity/attachments and separate quote creation/publishing only after workflow approval. |
+| Contact enquiries | Customer form and CMS queue exist | Verify end-to-end delivery, PII policy, validation and handling of unverified/anonymous submissions. |
+| Customers, admin access, audit history | APIs and CMS modules exist | Verify least-privilege roles, admin provisioning, audit coverage, pagination/export semantics and PII access. |
+| Quotation documents, equipment, manuals, notifications, settings | Not implemented as complete modules | Define system of record, owner, permissions, statuses, retention and delivery before adding real UI. |
 
-- [ ] Define account invitation/deactivation, customer deletion/retention, data export, privacy, and audit-retention policies.
-- [ ] Implement secure customer attachments for service requests: the app's “Add photos or video” control is currently disabled and disclosed as unavailable. Agree accepted types, size/count limits, privacy, retention, and CMS access; upload through an authenticated API to private storage and expose attachments only to the request owner and authorized staff.
-- [ ] Model registered equipment, ownership verification, warranty/AMC, service history, and notification delivery after the business rules and source of truth are confirmed.
-- [ ] Add a CMS-managed public/private manual library with authorization rules for private files.
-- [x] Add request text/status filters, assignment options limited to active CMS administrators, and backend-enforced status transitions.
-- [ ] Build complete RFQ-to-quotation workflow including quote creation, revisions, documents, customer review, and acceptance.
-- [ ] Review mobile accessibility, 375px/landscape/tablet layouts, dynamic type, offline/error states, and keyboard/screen-reader flows.
-- [ ] Review CMS responsive behavior, keyboard navigation, focus handling, and form validation at narrow and wide viewports.
+### Backend, database and platform
 
-## Priority 3 — Release readiness
+- Current API routes cover health/readiness, public catalogue/config/knowledge, CMS-authenticated content/catalogue/operations, customer profiles/requests, media upload and WordPress import/sync.
+- Product categories support a primary category and a many-to-many membership list. The sync maps every source category matched to an imported category. Live source IDs and category slugs must be checked to ensure the intended mappings exist; categories in the database alone do not prove the products belong to them.
+- Request creation requires a verified customer identity and uses a per-user database-backed rate limit. Admin authorization is API-enforced. These source controls require security and ownership tests against the deployed database.
+- Migration files include contact inquiry compatibility/index, request indexes, and product category memberships. Production migration state is unknown while the API is unreachable. Take a backup and test upgrade/rollback before applying pending migrations to production.
+- Media upload uses Supabase Storage and an API service key; file privacy, public bucket policy and retention need production validation. Product document URLs are public HTTPS links, not private downloads.
+- No verified load-test, database restore test, alerting, crash monitoring, or 10k-customer concurrency test is in current evidence. Do not infer 10k-user readiness from a successful APK build or a 178-product catalogue.
 
-- [x] Keep the Coolify variable template lean: require only API/CMS runtime and public build configuration, put standard WooCommerce routes/field mappings and the public media bucket in code defaults, and document WordPress/chat variables as feature-optional.
-- [ ] Replace temporary Coolify `sslip.io` HTTP domains with HTTPS domains before production; rebuild the CMS with `ALLOW_HTTP_TEST_API=false` and configure the production API URL in the customer app.
-- [ ] Resolve the browser's `Not secure` warning for `cms.enertechups.cloud` and verify the API domain certificate as well.
-- [ ] Configure real Firebase/Supabase/WordPress environments and validate secrets only in server-side deployment settings.
-- [x] Run CMS lint/typecheck, Flutter analyze, and Python syntax compilation for the source changes.
-- [ ] Execute/rollback migrations against staging Supabase, rerun the CMS production build after the final deployment configuration, and verify Flutter widgets on a configured device. Current local backend tests (23), CMS lint/typecheck, earlier Flutter analysis/tests, and APK signature verification pass.
-- [ ] Complete live staging journeys: admin draft/publish → mobile update; quote/service submission → CMS assignment/status → customer tracking; upload → display; WooCommerce sync → published collection/product.
-- [ ] Configure domain/TLS, backups/restore, monitoring, release signing, privacy/support policies, and rollback ownership.
-- [ ] Install the current signed APK on a device, exercise Firebase sign-in and all app workflows against the production HTTPS API, then publish the matching source revision and artifact. The signature and Android Firebase fingerprint now match, but the APK is not device- or live-API-verified.
+## Master work plan, in order
 
-## Confirmed implementation defects
+### P0 — Establish a safe, observable production baseline
 
-1. CMS used a committed Supabase service-role key in browser code and silently bypassed the API/RBAC when the API failed.
-2. CMS auth granted the `admin` UI role when the API session check failed or was skipped for localhost.
-3. CMS requested 300 products while the shared response schema rejected `limit > 100`; fallback behavior masked the API failure.
-4. Successful empty catalogue fetches fell back to cached products/categories, so unpublished content could remain visible on devices.
-5. CMS could save FAQ drafts but could not enter the source reference required by the publish API.
-6. Home featured-item configuration was a free-text UUID list; category/product selectors are now implemented.
-7. Draft API responses used truthy fallback logic, making cleared product fields appear unchanged in the CMS.
-8. Generic API errors returned raw exception messages to clients.
-9. Registered-equipment and warranty/AMC entry points implied unsupported workflows and, for warranty, showed generic product documents; those links have been removed until records and document types are modeled. The CMS chat URL now opens in-app, but provider-specific scripting and human handoff are not configured.
-10. The app's demo sign-in used fixed credentials and enabled an offline bypass when Firebase failed; the duplicate account-tab auth path also skipped email verification. These paths have been removed.
-11. CMS analytics and integration status presented fabricated historical counts and connectivity; these have been removed and replaced with accurate snapshots/setup notes.
-12. The former chat key in the Coolify environment example was non-empty and was sent to public clients. The template now uses a blank public-embed-key name; revoke the previous value.
-13. Missing app configuration previously fell back to embedded Firebase details and an emulator API URL; those defaults have been removed and release builds reject local/non-HTTPS API URLs.
-14. Sign-up did not gate onboarding on verified email, and profile edit accepted weak phone/GST values; these checks now align across account setup, profile edit, and API validation.
-15. Google sign-in fell back to a hard-coded OAuth client ID when build configuration was missing; it now reports an explicit configuration error.
-16. The CMS Docker/build configuration silently substituted a fixed Firebase project and localhost API URL; it now requires deployment values, requires HTTPS for production, and permits HTTP only for an explicitly enabled `.sslip.io` CMS test build. The CMS blocks sign-in when Firebase web configuration is absent.
-17. The public contact-inquiry endpoint accepted unauthenticated submissions without a rate limit and had no customer form or CMS triage; it now requires a verified Firebase account, rate-limits by stable Firebase UID, and provides an audited admin queue.
-18. CMS product views treated every non-`instock` value as out of stock and fabricated an MRP by multiplying the source price; they now show the four actual stock states, source quantity, and only the published price.
-19. The Support shortcut said service tracking was unavailable even though My Requests existed, and the manual library search was disabled despite published product documents being available; both now route to working app data/screens.
-20. CMS product/collection/knowledge/app-content APIs supported unpublishing but most editors exposed no action; role-appropriate unpublish controls are now present.
-21. Profile and quote/service request repositories marked local-only data as saved/submitted after API errors, and request fallbacks were shared across accounts; profile saves now wait for API confirmation and failed requests surface retryable errors without entering another account's request list.
-22. Contact inquiries had a SQLAlchemy model and API routes but no Alembic migration, so a clean deployment would fail on submission; migrations now create the table/indexes and add an optional Firebase UID. Existing UIDs are backfilled from audit events where possible. Rate limiting follows the stable account UID, so changing the account email cannot bypass the per-account cap; unmatched legacy rows still use a case-insensitive email fallback.
-23. CMS catalogue pages loaded only the first fixed-size batch and collections were not searched server-side; product/collection search and load-more controls now use the existing API pagination.
-24. Customer, quote/service, knowledge, and audit CMS views stopped at the first API page; load-more controls now expose subsequent results without hiding already loaded rows during requests.
-25. Customer table displayed selection checkboxes with no bulk actions; those inert controls are removed so the table no longer implies unsupported operations.
-26. App-content editors showed publication revisions but no field-level view of what was pending; they now compare draft and published values before publish.
-27. Request triage lacked filtering and active-staff assignment controls, and the API accepted out-of-sequence statuses or arbitrary assignee UIDs; triage now filters by search/status, assigns only active administrators, and validates transitions server-side.
-28. Audit history had pagination but no search/entity filters or export; it now supports those filters and exports only the currently loaded rows with CSV formula-injection escaping.
-29. A deliberately cleared nullable product price was replaced by the previous published price in CMS API responses; draft response mapping now honors an explicit `null` and product/collection editors compare draft values to the published snapshot.
-30. Offline catalogue filtering compared a category slug to each product's category UUID, so a cached category could appear empty; the repository now resolves the cached slug to its ID before filtering.
-31. Rapid catalogue searches could complete out of order and overwrite newer results, and leaving a featured category could preserve that filter; product loads now ignore stale responses and generic catalogue navigation clears the prior category.
-32. Google sign-in surfaced Firebase's raw package-certificate-hash failure text. The app now gives a recovery message and explicit Firebase Console steps; the release SHA still must be added by a Firebase administrator.
+- [ ] Restore workstation-to-production connectivity and capture API `/health/ready`, CMS `/`, TLS/certificate chain, Coolify deployed commit, container health, and redacted runtime startup errors.
+- [ ] Verify the signed-in Firebase UID has an active least-privilege CMS account; verify Firebase project ID/service account and exact CMS origin CORS configuration.
+- [ ] Verify Supabase connection, migration head, existing schema compatibility, backup freshness, and restore procedure before changing production data.
+- [ ] Reconcile local branch against the actual GitHub `main` head and preserve local user changes; publish only reviewed, targeted changes.
+- [ ] Rotate any previously exposed service-role or chat secrets and check that browser/app builds contain only public client configuration.
 
-## Customer app specification parity
+Acceptance: API readiness and CMS role check succeed over HTTPS; database migration state is known; no server-only credentials exist in client artifacts; rollback/backup checkpoint recorded.
 
-The supplied UI/UX blueprint lists these customer journeys. Current source status:
+### P1 — Resolve product/category/document sync and prove it on one named product
 
-| Journey | Source status |
-|---|---|
-| Home, product browse/search, collection filter, product details | Implemented; homepage collection taps now apply the correct filter |
-| Solution Finder, quote submit, request list, service request | Implemented with API-backed quote/service request records |
-| Account profile and Firebase onboarding | Implemented; fixed demo bypass removed |
-| Support contacts, FAQs, hosted support URL, contact enquiry | Contact/FAQ CMS content is consumed; verified customers can submit a contact message; admins can search, update status, and add internal notes |
-| Product comparison and requirement basket | Source implementation now supports a session-scoped list of up to four products, side-by-side published specifications, removal, and prefilled quote enquiries; persistence and device QA remain open |
-| Quotation document/detail and customer acceptance | Not implemented; quote records stop at inquiry/status |
-| Service request detail timeline and confirmed appointment | Partial; status/note tracking exists, no timeline/appointment model |
-| Human agent handoff | CMS allowlisted HTTPS handoff action is wired; live provider script/key and agent availability still need staging validation |
-| Registered equipment, warranty/AMC, service history | Not available in the app until verified record models and workflows exist; misleading entry points removed |
-| Manual/document library search | Searchable published product documents are connected; no CMS-managed private manuals/coverage records exist |
-| Addresses, notifications, settings/consent/privacy | Not implemented |
+- [ ] In CMS WordPress status, verify site URL, REST routes, auth state and configured document mapping. Use `https://enertechups.com/wp-json` plus valid read-only WooCommerce credentials if the source is WooCommerce REST.
+- [ ] Inspect the exact WordPress product JSON for the product in the user screenshot. Check `downloads`, PDF attachment media, and custom ACF/meta field path; confirm the source URL is HTTPS and publicly reachable.
+- [ ] Set `WORDPRESS_SOURCE_DOCUMENTS_FIELD` to the real nested field path if the PDF is stored outside standard `downloads`; if the source product has no PDF, upload/attach the approved PDF in WordPress first.
+- [ ] Run one sync; record created/updated/withdrawn/category counts and `documents_linked`; verify the product row keeps all intended category memberships, image, price, stock, specs, and document title/URL.
+- [ ] Verify the CMS product card exposes the PDF action and the published mobile product detail/library exposes and opens the same PDF. Test query-string PDF URLs and non-PDF links.
+- [ ] Add clear CMS copy explaining WordPress-owned items are edited in WordPress; add a missing-document diagnostic to distinguish “source has no PDF” from “sync field mapping did not match.”
 
-The supplied CMS specification also calls for enquiry/quote/service queues, assignment, activity history, manuals, notifications, audit filtering/export, and paginated search. Current CMS has searchable, filterable request triage with active-staff assignment, inquiry intake, searchable/entity-filtered audit history with CSV export for loaded rows, and paginated lists, but lacks full quote issue/revision, request activity timelines, document management, and notification delivery.
+Acceptance: one source product can be traced by source ID through WordPress → sync result → DB/API product → CMS card → app detail/PDF open, with matching category and document data.
 
-CMS app-content parity checked from source:
+### P2 — Complete CMS-to-app content management and fix CMS usability
 
-- Home search prompt, intent-card copy, hero copy/CTA, announcement fields, section visibility/order, featured products, and featured collections are consumed. The CMS limits featured selectors to the 12 IDs accepted by the API; the app resolves selected product IDs directly, and the CMS Home selector now loads additional catalogue pages when needed.
-- Contact phone, WhatsApp, emails, address, support hours, and availability text are consumed by the support/contact screens.
-- Solution Finder options, step titles, and both helper prompts are consumed.
-- Brand display name and logo are consumed; `support_icon_url` is now displayed in the support header.
-- Chat enablement, embed URL, welcome/fallback messages, and allowlisted human handoff are consumed. The hosted widget provider script/key contract remains unverified.
-- Knowledge answers are consumed from the public knowledge endpoint. Product document URLs are searchable in the information library, but are public HTTPS links without private-file authorization.
+- [ ] Verify contact details can be drafted, published, and reflected in call/WhatsApp/email/address/hours in the app.
+- [ ] Verify branding assets/name, Home hero/CTA/featured products/collections/announcements/order/visibility, Solution Finder steps/options, chat/handoff, and published FAQ each reflect in the app after refresh.
+- [ ] Improve desktop CMS navigation so the entire module hierarchy is understandable at 100% browser zoom without relying on 50% zoom; keep 100%-width work area, predictable scroll, keyboard access, readable body/table text and clear focused controls.
+- [ ] Fix products/collections list density and wrap: readable images/names/price, non-overlapping long category badges, obvious source ownership, and per-product PDF/document action.
+- [ ] Improve service/request layout so customer identity and submitted details remain together, controls do not float across excessive empty space, and Save provides success/error/loading feedback.
+- [ ] Add preview/validation/unsaved-change feedback consistently to app-content forms; do not allow unpublished or missing-source data to look published.
 
-## Verification notes
+Acceptance: CMS passes 100% zoom visual review at wide and narrow widths; all editable app-content fields have verified app consumers; no overlap/clipping in realistic long product/category/customer content.
 
-- This document records source-level findings. No live service behavior can be confirmed without the external project credentials and source mappings.
-- Visual/device QA remains open. The UI/UX Pro Max search returned guidance for visible labels, correct input types, password-manager support, and confirmation feedback; small-screen, landscape, dynamic-text, contrast, touch-target, and keyboard-focus checks still need rendered device/browser review.
-- Latest local checks: CMS ESLint, TypeScript `--noEmit`, and production build pass after the catalogue selector and icon/touch-target fixes. All 23 backend tests pass. Python compilation and Alembic offline SQL were previously verified through `c42e17b3d906`; no production/staging database migration was executed. Flutter analysis and six widget/unit tests passed in the earlier configured environment, but could not be repeated in this shell because the Flutter SDK is unavailable. No Android device is connected. The local APK signature and embedded build configuration were verified, but end-to-end Firebase/API behavior is not verified.
+### P3 — Complete customer app core journeys and expose missing work honestly
 
+- [ ] Fix the generic product detail app-bar title; verify image/price/stock/spec formatting and missing-document states with long WooCommerce HTML descriptions.
+- [ ] Verify catalogue collections use all imported category memberships, filters/search/pagination work, and selected Home items are published and visible.
+- [ ] Run quote, service, contact inquiry, profile update, request refresh/status, compare-to-quote and PDF open journeys against staging/production without creating accidental live data.
+- [ ] Implement secure request attachments after accepted file types/count/size, private-storage policy, access/retention and malware controls are specified. The current service-photo control is knowingly disabled.
+- [ ] Define and implement quotation revision/document access, request detail/timeline, notifications, registered equipment, verified warranty/AMC, saved addresses and privacy/settings only against approved business workflows and data sources.
+- [ ] Keep app labels and Support content explicit for features not configured; no dead controls, fake successes or unsupported “AI verified”/coverage claims.
+
+Acceptance: each customer action has API success/error/loading/empty states, request ownership checks, durable IDs, and a visible confirmation; no unimplemented screen is represented as operational.
+
+### P4 — Security, scale and release verification
+
+- [ ] Run backend unit/API tests for authentication, role/ownership/IDOR boundaries, status transitions, pagination/search, WooCommerce mapping, categories/documents, migrations and uploads.
+- [ ] Run Flutter analyze/widget tests and CMS lint/typecheck/build after app/CMS changes. Review accessibility, text scaling, keyboard/focus and 44px touch targets on devices/browsers.
+- [ ] Validate API/database connection pool, indexes and request rate limits under an agreed 10k-account growth profile; add monitoring and load tests before claiming capacity.
+- [ ] Test empty install, update install, poor network, expired auth, no cache, stale cache, Android back/keyboard, narrow viewport, large font, and signed release on the connected phone.
+- [ ] Increment Android version name/code for every distributable update; verify signing key, Firebase SHA-1, package ID, API URL, artifact hash and install result.
+- [ ] Reconcile and push the reviewed CMS/API changes, verify the exact deployed commit in Coolify, then build/install the APK from the corresponding app source revision.
+
+Acceptance: source, deployed services and APK commit/config/signature are linked by recorded revision and hash; core workflows pass on the live/staging system; operational rollback and data recovery are demonstrated.
+
+## Immediate diagnosis for the missing PDF
+
+1. The app reads `ProductPublic.documents` from `/api/v1/catalogue/products/{slug}`. Its missing-document message means that array was empty for the product data shown (or the view is displaying an old cached catalogue record until detail fetch completes).
+2. The CMS product card can show a PDF only if that same product record contains a valid HTTPS document URL. WordPress-owned products are not editable in the CMS product form by design.
+3. The local importer supports WooCommerce `downloads`, matching PDF-related Woo metadata, PDF URLs in descriptions, attached PDF media, and the optional `WORDPRESS_SOURCE_DOCUMENTS_FIELD`. The field path must match the actual REST JSON. `SUPABASE_DATABASE_URL` does not control this integration.
+4. Production answer still requires inspecting this product’s WordPress JSON and running a fresh sync. Both production hostnames timed out during this audit, so the source-side cause cannot yet be distinguished from an unset/wrong field mapping.
+
+## Audit boundaries
+
+- Current local code and user screenshots are evidence for source/UI state, not proof of the live deployment.
+- The exact WordPress document field path, source PDF, Coolify env values, production migration head, and current remote GitHub head are not available from this machine at audit time.
+- Do not run a write operation against production (sync, publish, request submission, migration or secret rotation) until the endpoint is reachable, the intended record is identified, and backup/rollback state is clear.
+- This plan is a current audit and execution checklist, not a claim that all listed work is complete.

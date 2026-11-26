@@ -2,7 +2,7 @@ import re
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from app.schemas.catalogue import ProductDocument, ProductPage
 
@@ -35,11 +35,35 @@ class CategoryAdmin(BaseModel):
     wordpress_source_id: str | None
     is_published: bool
     has_draft: bool
+    catalog_pdf_url: str | None = None
+    catalog_pdf_title: str | None = None
     published_payload: dict[str, object] | None = None
+
+
+class CategoryCatalogueWrite(BaseModel):
+    category_key: str = Field(min_length=1, max_length=180)
+    category_id: UUID | None = None
+    wordpress_category_id: str | None = Field(default=None, max_length=160)
+    title: str = Field(default="Category catalogue PDF", min_length=1, max_length=180)
+    catalog_pdf_url: str = Field(min_length=8, max_length=1000, pattern=r"^https://")
+
+
+class CategoryCatalogueAdmin(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    category_key: str
+    category_id: UUID | None
+    wordpress_category_id: str | None
+    title: str
+    catalog_pdf_url: str
+    source: str
+    updated_at: str
 
 
 class ProductWrite(BaseModel):
     category_id: UUID
+    category_ids: list[UUID] = Field(default_factory=list, max_length=50)
     slug: str = Field(min_length=2, max_length=180, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     name: str = Field(min_length=2, max_length=220)
     model_code: str | None = Field(default=None, max_length=120)
@@ -59,6 +83,11 @@ class ProductWrite(BaseModel):
     source_reference: str | None = Field(default=None, max_length=500)
     wordpress_source_id: str | None = Field(default=None, max_length=160)
     wordpress_source_url: HttpUrl | None = None
+
+    @model_validator(mode="after")
+    def include_primary_category(self) -> "ProductWrite":
+        self.category_ids = list(dict.fromkeys([self.category_id, *self.category_ids]))
+        return self
 
     @field_validator("applications", "features")
     @classmethod
@@ -80,6 +109,7 @@ class ProductWrite(BaseModel):
 
 class ProductPatch(BaseModel):
     category_id: UUID | None = None
+    category_ids: list[UUID] | None = Field(default=None, max_length=50)
     slug: str | None = Field(default=None, min_length=2, max_length=180, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     name: str | None = Field(default=None, min_length=2, max_length=220)
     model_code: str | None = Field(default=None, max_length=120)
@@ -104,6 +134,7 @@ class ProductPatch(BaseModel):
 class ProductAdmin(BaseModel):
     id: UUID
     category_id: UUID
+    category_ids: list[UUID]
     slug: str
     name: str
     model_code: str | None
@@ -120,6 +151,8 @@ class ProductAdmin(BaseModel):
     stock_status: str
     stock_quantity: int | None
     documents: list[ProductDocument]
+    catalog_pdf_url: str | None = None
+    catalog_pdf_source: Literal["product", "category", "none"] = "none"
     source_reference: str | None
     wordpress_source_id: str | None
     wordpress_source_url: str | None
@@ -130,7 +163,8 @@ class ProductAdmin(BaseModel):
 
 
 class ProductAdminPage(ProductPage):
-    # The admin handler returns ProductAdmin instances directly.
+    # Admin list endpoints build ProductAdmin objects directly. Keep the page
+    # item type identical so Pydantic does not reject the base model instances.
     items: list[ProductAdmin]
 
 

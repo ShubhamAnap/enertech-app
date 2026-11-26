@@ -1,7 +1,7 @@
 name: enertech_customer
 description: Android-first EnerTech customer platform.
 publish_to: 'none'
-version: 0.1.1+2
+version: 0.1.2+3
 
 environment:
   sdk: ^3.14.0
@@ -27,4 +27,5 @@ flutter:
   uses-material-design: true
   assets:
     - .env
-
+    - assets/brand/enertech_logo.png
+    - assets/brand/enertech_launcher.png

@@ -39,7 +39,9 @@ class ProductPublic(BaseModel):
     stock_status: str
     stock_quantity: int | None
     documents: list[ProductDocument]
+    catalog_pdf_url: str | None = None
     category_id: UUID
+    category_ids: list[UUID]
     updated_at: datetime
 
 

@@ -49,4 +49,3 @@ Output: `update.apk` at the workspace root (copied from `apps/mobile/build/app/o
 ## Current gate
 
 The latest observed CMS screen reports **CMS access not granted**. The API denies CMS access unless the verified Firebase UID has an active `admin_accounts` record or appears in `BOOTSTRAP_SUPER_ADMIN_UIDS`. To provision the first administrator, copy the signed-in user's UID from Firebase Console → Authentication → Users, set that UID in Coolify, and redeploy the API. Then create an active `super_admin` account in CMS → Admin access, remove the temporary bootstrap UID, and redeploy the API again. A migration-safe patch for the existing Supabase `contact_inquiries` schema was pushed as `c1c0691ba9dbef629a7ab0af89a083ceea8b437f`; production migration completion and API health still require confirmation. Verify CMS/API HTTPS, CMS publishing, product sync, media uploads, request ownership, backups, and rollback in staging before production acceptance.
-

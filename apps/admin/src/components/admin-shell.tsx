@@ -11,23 +11,26 @@ type WordPressStatus = { configured: boolean; authenticated: boolean; documents_
 const sectionNames: Record<Section, string> = { overview: "Overview", products: "Products", categories: "Collections", home: "Home screen", contacts: "Contact details", solution_finder: "Solution Finder", chat: "Chat support", brand: "App branding", wordpress: "WordPress import", service: "Service requests", quotes: "Quote enquiries", contact_inquiries: "Contact enquiries", knowledge: "FAQs & knowledge", customers: "Customers", admins: "Admin access", audit: "Audit history" };
 const contentSections: { key: Section; title: string }[] = [{ key: "home", title: "Home screen" }, { key: "contacts", title: "Contact details" }, { key: "solution_finder", title: "Solution Finder" }, { key: "chat", title: "Chat support" }, { key: "brand", title: "App branding" }, { key: "knowledge", title: "FAQs & knowledge" }];
 const emptyCategory = { slug: "", name: "", description: "", sort_order: 0, image_url: null as string | null, wordpress_source_id: null as string | null };
-const emptyProduct = { category_id: "", slug: "", name: "", model_code: "", summary: "", description: "", applications: [] as string[], features: [] as string[], specifications: {} as Record<string, unknown>, image_url: null as string | null, gallery_images: [] as string[], price_minor: null as number | null, currency_code: "INR", currency_minor_unit: 2, stock_status: "unknown" as Product["stock_status"], stock_quantity: null as number | null, documents: [] as Product["documents"], source_reference: "", wordpress_source_id: null as string | null, wordpress_source_url: null as string | null };
+const emptyProduct = { category_id: "", category_ids: [] as string[], slug: "", name: "", model_code: "", summary: "", description: "", applications: [] as string[], features: [] as string[], specifications: {} as Record<string, unknown>, image_url: null as string | null, gallery_images: [] as string[], price_minor: null as number | null, currency_code: "INR", currency_minor_unit: 2, stock_status: "unknown" as Product["stock_status"], stock_quantity: null as number | null, documents: [] as Product["documents"], source_reference: "", wordpress_source_id: null as string | null, wordpress_source_url: null as string | null };
 const emptyKnowledge = { slug: "", title: "", category: "General", answer: "", source_reference: "", sort_order: 0 };
 
 function textValue(value: unknown): string { return value == null ? "" : typeof value === "string" ? value : JSON.stringify(value, null, 2); }
 function humanize(key: string): string { return key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
 function catalogPrice(product: Product): string { if (product.price_minor == null) return "—"; const digits = productPriceDigits(product); return new Intl.NumberFormat("en-IN", { style: "currency", currency: product.currency_code, minimumFractionDigits: 0, maximumFractionDigits: digits }).format(product.price_minor / (10 ** digits)); }
 function productPriceDigits(product: Pick<Product, "currency_minor_unit">): number { return Math.max(0, Math.min(product.currency_minor_unit, 4)); }
-function productDatasheet(product: Pick<Product, "documents" | "wordpress_source_url">): { title: string; url: string } | null {
-  const match = (product.documents ?? []).find((document) => {
+function productDatasheet(product: Pick<Product, "documents" | "catalog_pdf_url" | "catalog_pdf_source" | "wordpress_source_url">): { title: string; url: string; inherited: boolean } | null {
+  const inherited = product.catalog_pdf_source === "category";
+  const documents = product.documents ?? [];
+  const match = documents.find((document) => {
     const url = document.url?.toLowerCase().split(/[?#]/, 1)[0] ?? "";
     const title = document.title?.toLowerCase() ?? "";
     return url.endsWith(".pdf") || /pdf|datasheet|catalogue|brochure/.test(title);
   });
-  if (match?.url) return { title: match.title || "Product catalogue PDF", url: match.url };
+  if (match?.url) return { title: match.title || "Product catalogue PDF", url: match.url, inherited };
+  if (product.catalog_pdf_url) return { title: "Collection catalogue PDF", url: product.catalog_pdf_url, inherited: true };
   const sourceUrl = product.wordpress_source_url ?? "";
   return sourceUrl.toLowerCase().split(/[?#]/, 1)[0].endsWith(".pdf")
-    ? { title: "Product catalogue PDF", url: sourceUrl }
+    ? { title: "Product catalogue PDF", url: sourceUrl, inherited: false }
     : null;
 }
 function BoltMark({ className = "h-4 w-4" }: { className?: string }) { return <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M13 2 4 14h7l-1 8 10-12h-7l1-8Z" /></svg>; }
@@ -95,6 +98,10 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [editingProduct, setEditingProduct] = useState<string | null>(null);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
   const [showProductForm, setShowProductForm] = useState(false);
+  const [cataloguePdfTarget, setCataloguePdfTarget] = useState<Category | null>(null);
+  const [cataloguePdfTitle, setCataloguePdfTitle] = useState("");
+  const [cataloguePdfUrl, setCataloguePdfUrl] = useState("");
+  const [cataloguePdfUploading, setCataloguePdfUploading] = useState(false);
   const [knowledgeArticles, setKnowledgeArticles] = useState<KnowledgeArticle[]>([]);
   const [customerProfiles, setCustomerProfiles] = useState<CustomerProfile[]>([]);
   const [adminAccounts, setAdminAccounts] = useState<AdminAccount[]>([]);
@@ -317,7 +324,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const filteredProducts = products.filter((p) => {
     const q = query.trim().toLowerCase();
     const matchesQuery = !q || p.name.toLowerCase().includes(q) || p.slug.toLowerCase().includes(q) || (p.model_code && p.model_code.toLowerCase().includes(q)) || (p.summary?.toLowerCase().includes(q) ?? false) || (p.description?.toLowerCase().includes(q) ?? false);
-    const matchesCategory = selectedProductCategory === "all" || p.category_id === selectedProductCategory;
+    const matchesCategory = selectedProductCategory === "all" || (p.category_ids ?? [p.category_id]).includes(selectedProductCategory);
     const matchesStatus = productStatusFilter === "all" || (productStatusFilter === "published" ? p.is_published : !p.is_published);
     return matchesQuery && matchesCategory && matchesStatus;
   });
@@ -380,7 +387,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
         setError("Each document needs a title and an HTTPS URL.");
         return;
       }
-      const payload = { ...productForm, specifications, applications: Array.isArray(productForm.applications) ? productForm.applications : [], features: Array.isArray(productForm.features) ? productForm.features : [], gallery_images: Array.isArray(productForm.gallery_images) ? productForm.gallery_images : [], documents };
+      const payload = { ...productForm, category_ids: [...new Set([productForm.category_id, ...(productForm.category_ids ?? [])].filter(Boolean))], specifications, applications: Array.isArray(productForm.applications) ? productForm.applications : [], features: Array.isArray(productForm.features) ? productForm.features : [], gallery_images: Array.isArray(productForm.gallery_images) ? productForm.gallery_images : [], documents };
       const saved = await api<Product>(user, editingProduct ? `/admin/catalogue/products/${editingProduct}` : "/admin/catalogue/products", { method: editingProduct ? "PATCH" : "POST", body: JSON.stringify(payload) });
       setNotice("Product draft saved."); setProductForm(saved); setEditingProduct(saved.id); await loadCatalogue();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save product."); }
@@ -485,6 +492,33 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   }
 
   function editCategory(category: Category) { setCategoryForm(category); setEditingCategory(category.id); setShowCategoryForm(true); }
+  function openCategoryCatalogueModal(category: Category) {
+    setCataloguePdfTarget(category);
+    setCataloguePdfTitle(category.catalog_pdf_title || `${category.name} Catalogue PDF`);
+    setCataloguePdfUrl(category.catalog_pdf_url || "");
+  }
+  async function saveCategoryCataloguePdf(event: FormEvent) {
+    event.preventDefault();
+    if (!cataloguePdfTarget) return;
+    setError(""); setNotice("");
+    try {
+      await api(user, "/admin/catalogue/category-catalogues", {
+        method: "PUT",
+        body: JSON.stringify({
+          category_key: cataloguePdfTarget.slug,
+          category_id: cataloguePdfTarget.id,
+          wordpress_category_id: cataloguePdfTarget.wordpress_source_id,
+          title: cataloguePdfTitle.trim() || `${cataloguePdfTarget.name} Catalogue PDF`,
+          catalog_pdf_url: cataloguePdfUrl.trim(),
+        }),
+      });
+      setNotice(`Catalogue PDF saved for "${cataloguePdfTarget.name}". Products in this collection without their own PDF now inherit it.`);
+      setCataloguePdfTarget(null);
+      await loadCatalogue();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save collection catalogue PDF.");
+    }
+  }
   function editProduct(product: Product) { setProductForm(product); setSpecificationsText(JSON.stringify(product.specifications ?? {}, null, 2)); setSpecificationsError(""); setEditingProduct(product.id); setShowProductForm(true); }
 
   function toggleSelectProduct(id: string) {
@@ -606,23 +640,23 @@ export default function AdminShell({ user, role }: { user: User; role: string })
         {/* MAIN COLUMN */}
         <div className="main-column">
           <header className="topbar">
-            <div className="flex items-center gap-2">
-              <button className="btn btn-ghost btn-square mobile-menu" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><AdminIcon name="menu" className="h-5 w-5" /></button>
-              <div className="breadcrumbs">Workspace <span className="mx-2 text-base-300">/</span><strong>{title}</strong></div>
+            <div className="flex min-w-0 items-center gap-2">
+              <button className="btn btn-ghost btn-square mobile-menu shrink-0" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><AdminIcon name="menu" className="h-5 w-5" /></button>
+              <div className="breadcrumbs truncate">Workspace <span className="mx-1.5 text-base-300">/</span><strong>{title}</strong></div>
             </div>
-            <div className="topbar-actions flex items-center gap-3">
-              <span className="hidden text-xs text-base-content/65 sm:inline font-medium">{user.email}</span>
-              <button className="btn btn-ghost btn-sm" onClick={() => { const auth = getFirebaseAuth(); if (auth) void signOut(auth); }}>Sign out</button>
+            <div className="topbar-actions">
+              <span className="hidden max-w-52 truncate text-xs text-base-content/65 sm:inline font-medium">{user.email}</span>
+              <button className="btn btn-ghost btn-sm shrink-0" onClick={() => { const auth = getFirebaseAuth(); if (auth) void signOut(auth); }}>Sign out</button>
             </div>
           </header>
 
           <main className="content-wrap">
-            <div className="prototype-note flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span aria-hidden="true" className="text-emerald-500 font-bold">●</span>
-                <span><strong>Changes are staged safely.</strong> Save creates a draft; publishing makes it available to the customer app.</span>
+            <div className="prototype-note">
+              <div className="flex min-w-0 flex-1 items-start sm:items-center gap-2">
+                <span aria-hidden="true" className="text-emerald-500 font-bold shrink-0">●</span>
+                <span className="min-w-0"><strong>Changes are staged safely.</strong> Save creates a draft; publishing makes it available to the customer app.</span>
               </div>
-              <button className="btn btn-xs btn-ghost text-xs underline" onClick={() => void wordpressSync()}><BoltMark className="h-3.5 w-3.5" /> Quick Sync WP</button>
+              <button className="btn btn-xs btn-outline border-sky-300/80 text-sky-900 hover:bg-sky-100 shrink-0" onClick={() => void wordpressSync()}><BoltMark className="h-3.5 w-3.5" /> Quick Sync WP</button>
             </div>
 
             {notice && <div role="status" className="alert alert-success mb-4 text-sm font-medium">{notice}</div>}
@@ -741,7 +775,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       className="btn btn-sm btn-primary gap-1"
                       onClick={() => {
                         if (section === "products") {
-                          setProductForm({ ...emptyProduct, category_id: categories[0]?.id ?? "" });
+                          setProductForm({ ...emptyProduct, category_id: categories[0]?.id ?? "", category_ids: categories[0] ? [categories[0].id] : [] });
                           setSpecificationsText("{}"); setSpecificationsError("");
                           setEditingProduct(null);
                           setShowProductForm(true);
@@ -759,12 +793,13 @@ export default function AdminShell({ user, role }: { user: User; role: string })
 
                 {/* Toolbar Filter Bar */}
                 <article className="card panel table-panel overflow-hidden border border-base-200 rounded-xl">
-                  <div className="table-toolbar flex flex-wrap items-center justify-between gap-3 p-3.5 border-b border-base-200 bg-base-100">
-                    <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[300px]">
+                  <div className="table-toolbar">
+                    <div className="flex min-w-0 w-full flex-wrap items-center gap-2 lg:w-auto lg:flex-1">
                       {/* Search */}
-                      <label className="input input-bordered input-sm flex items-center gap-2 flex-1 max-w-sm rounded-lg">
+                      <label className="input input-bordered input-sm flex min-w-0 w-full items-center gap-2 rounded-lg sm:w-64 md:w-72">
                         <span aria-hidden="true" className="text-base-content/40">⌕</span>
                         <input
+                          className="min-w-0 flex-1"
                           maxLength={120}
                           placeholder={`Search ${section}...`}
                           value={query}
@@ -777,7 +812,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         <>
                           {/* Collections dropdown */}
                           <select
-                            className="select select-bordered select-sm text-xs rounded-lg max-w-[200px]"
+                            className="select select-bordered select-sm w-full min-w-0 rounded-lg text-xs sm:w-52"
                             value={selectedProductCategory}
                             onChange={(e) => setSelectedProductCategory(e.target.value)}
                           >
@@ -789,7 +824,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
 
                           {/* Status filter dropdown */}
                           <select
-                            className="select select-bordered select-sm text-xs rounded-lg"
+                            className="select select-bordered select-sm w-full min-w-0 rounded-lg text-xs sm:w-36"
                             value={productStatusFilter}
                             onChange={(e) => setProductStatusFilter(e.target.value as "all" | "published" | "draft")}
                           >
@@ -801,7 +836,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       )}
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3 shrink-0">
                       {section === "products" && categoryHasMore && <button className="btn btn-ghost btn-xs" disabled={loading} onClick={() => void loadCatalogue(products.length, categories.length, true)}>Load more collections</button>}
                       {section === "products" && (
                         <div className="join border border-base-300 rounded-lg overflow-hidden bg-base-200/50">
@@ -830,8 +865,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   {/* PRODUCTS: TABLE VIEW (Exact Medusa Store Layout) */}
                   {section === "products" && productViewMode === "table" && (
                     <div className="overflow-x-auto">
-                      <table className="table w-full text-sm">
-                        <thead className="bg-base-200/50 text-xs text-base-content/70 border-b border-base-200 uppercase tracking-wider">
+                      <table className="table content-table w-full">
+                        <thead>
                           <tr>
                             <th className="w-10">
                               <input
@@ -852,7 +887,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         </thead>
                         <tbody className="divide-y divide-base-200">
                           {filteredProducts.map((product) => {
-                            const category = categories.find((c) => c.id === product.category_id);
+                            const categoryNames = categories.filter((c) => (product.category_ids ?? [product.category_id]).includes(c.id)).map((c) => c.name);
+                            const categoryLabel = categoryNames.join(", ") || "General";
                             const isSelected = selectedProductIds.has(product.id);
                             const pdfDoc = productDatasheet(product);
 
@@ -885,13 +921,13 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                     </div>
                                   </div>
                                 </td>
-                                <td className="max-w-40">
-                                  <span className="badge badge-sm badge-outline h-auto min-h-6 max-w-full whitespace-normal break-words px-2 py-1 text-left text-xs font-medium leading-tight">
-                                    {category?.name || "General"}
+                                <td className="w-40 max-w-40">
+                                  <span className="block line-clamp-2 whitespace-normal break-words text-xs leading-snug text-base-content/75" title={categoryLabel}>
+                                    {categoryLabel}
                                   </span>
                                 </td>
                                 <td>
-                                  <span className="inline-flex items-center gap-1.5 text-xs font-medium">
+                                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium">
                                     <span className={`w-2 h-2 rounded-full ${product.is_published ? "bg-emerald-500" : "bg-amber-400"}`} />
                                     <span className={product.is_published ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400"}>
                                       {product.is_published ? "Published" : "Draft"}
@@ -899,20 +935,20 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                   </span>
                                 </td>
                                 <td>
-                                  <span className="text-xs text-base-content/70">{product.wordpress_source_id ? "WooCommerce" : "CMS managed"}</span>
+                                  <span className="whitespace-nowrap text-xs text-base-content/70">{product.wordpress_source_id ? "WooCommerce" : "CMS managed"}</span>
                                 </td>
                                 <td>
-                                  <div className="flex flex-col items-start gap-1">
-                                    <span className={`badge badge-sm ${stockBadgeClass(product.stock_status)}`}>{stockLabel(product.stock_status)}</span>
+                                  <div className="flex flex-col items-start gap-1 whitespace-nowrap">
+                                    <span className={`badge badge-sm whitespace-nowrap ${stockBadgeClass(product.stock_status)}`}>{stockLabel(product.stock_status)}</span>
                                     {product.stock_quantity != null && <span className="text-xs text-base-content/60">Qty {product.stock_quantity}</span>}
                                   </div>
                                 </td>
                                 <td>
-                                  <strong className="font-bold text-base-content">
+                                  <strong className="whitespace-nowrap font-bold text-base-content">
                                     {catalogPrice(product)}
                                   </strong>
                                 </td>
-                                <td className="text-right">
+                                <td className="text-right whitespace-nowrap">
                                   <div className="flex items-center justify-end gap-1">
                                     {pdfDoc && (
                                       <a
@@ -920,9 +956,9 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                         target="_blank"
                                         rel="noreferrer"
                                         className="btn btn-ghost btn-xs text-primary"
-                                        title={`View ${pdfDoc.title}`}
+                                        title={pdfDoc.inherited ? `${pdfDoc.title} (inherited from collection)` : pdfDoc.title}
                                       >
-                                        PDF
+                                        {pdfDoc.inherited ? "Collection PDF" : "PDF"}
                                       </a>
                                     )}
                                     <button className="btn btn-ghost btn-xs" disabled={Boolean(product.wordpress_source_id)} onClick={() => editProduct(product)} title={product.wordpress_source_id ? "Managed by WooCommerce; edit it there, then sync again" : "Edit"}>
@@ -952,7 +988,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                     <div className="p-4">
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                         {filteredProducts.map((product) => {
-                          const category = categories.find((c) => c.id === product.category_id);
+                          const categoryNames = categories.filter((c) => (product.category_ids ?? [product.category_id]).includes(c.id)).map((c) => c.name);
                           const pdfDoc = productDatasheet(product);
 
                           return (
@@ -996,7 +1032,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                     {product.model_code || product.slug}
                                   </p>
                                   <p className="text-xs text-base-content/60 font-medium mt-1">
-                                    {category?.name || "Equipment"}
+                                    {categoryNames.join(", ") || "Equipment"}
                                   </p>
                                 </div>
 
@@ -1012,22 +1048,22 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                     {product.stock_quantity != null && <span className="ml-2 text-xs text-base-content/60">Qty {product.stock_quantity}</span>}
                                   </div>
 
-                                  <div className="flex items-center gap-1.5 pt-3 mt-3 border-t border-base-200">
+                                  <div className="flex flex-wrap items-center gap-1.5 pt-3 mt-3 border-t border-base-200">
                                     {pdfDoc && (
                                       <a
                                         href={pdfDoc.url}
                                         target="_blank"
                                         rel="noreferrer"
-                                        className="btn btn-sm btn-outline gap-1 h-10 min-h-10 px-2 font-medium border-base-300 hover:bg-base-200"
-                                        title={`View ${pdfDoc.title}`}
+                                        className="btn btn-xs btn-outline gap-1 h-8 min-h-8 px-2 font-medium border-base-300 text-primary hover:bg-base-200"
+                                        title={pdfDoc.inherited ? `${pdfDoc.title} (inherited from collection)` : pdfDoc.title}
                                       >
-                                        <AdminIcon name="document" /> PDF
+                                        <AdminIcon name="document" /> {pdfDoc.inherited ? "Cat PDF" : "PDF"}
                                       </a>
                                     )}
                                     <button
                                       disabled={Boolean(product.wordpress_source_id)}
                                       onClick={() => editProduct(product)}
-                                      className="btn btn-sm btn-outline gap-1 h-10 min-h-10 px-2 font-medium border-base-300 hover:bg-base-200"
+                                      className="btn btn-xs btn-outline gap-1 h-8 min-h-8 px-2 font-medium border-base-300 hover:bg-base-200"
                                       title={product.wordpress_source_id ? "Managed by WooCommerce; edit it there, then sync again" : "Edit"}
                                     >
                                       <AdminIcon name="edit" /> Edit
@@ -1035,7 +1071,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                     <button
                                       disabled={Boolean(product.wordpress_source_id)}
                                       onClick={() => product.is_published ? void unpublish(`/admin/catalogue/products/${product.id}/unpublish`) : void publish(`/admin/catalogue/products/${product.id}/publish`)}
-                                      className="btn btn-sm btn-outline gap-1 h-10 min-h-10 px-2 font-medium border-base-300 hover:bg-base-200"
+                                      className="btn btn-xs btn-outline gap-1 h-8 min-h-8 px-2 font-medium border-base-300 hover:bg-base-200"
                                       title={product.wordpress_source_id ? "Managed by WooCommerce" : product.is_published ? "Unpublish" : "Publish"}
                                     >
                                       {product.is_published ? "Unpublish" : "Publish"}
@@ -1043,7 +1079,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                     <button
                                       disabled={Boolean(product.wordpress_source_id)}
                                       onClick={() => deleteProductItem(product.id, product.name)}
-                                      className="btn btn-sm btn-outline btn-error gap-1 h-10 min-h-10 px-2 font-medium hover:text-white"
+                                      className="btn btn-xs btn-outline btn-error gap-1 h-8 min-h-8 px-2 font-medium hover:text-white"
                                       title={product.wordpress_source_id ? "Managed by WooCommerce; remove it there, then sync again" : "Delete"}
                                     >
                                       <AdminIcon name="delete" /> Delete
@@ -1077,6 +1113,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                           <tr>
                             <th>Collection / Category</th>
                             <th>Slug</th>
+                            <th>Catalogue PDF</th>
                             <th>Sort Order</th>
                             <th>Status</th>
                             <th className="text-right">Actions</th>
@@ -1090,6 +1127,15 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                 {category.description && <span className="block text-xs text-base-content/55 truncate max-w-md">{category.description}</span>}
                               </td>
                               <td className="font-mono text-xs">{category.slug}</td>
+                              <td>
+                                {category.catalog_pdf_url ? (
+                                  <a href={category.catalog_pdf_url} target="_blank" rel="noreferrer" className="link link-primary text-xs font-medium" title={category.catalog_pdf_title || "Open collection PDF"}>
+                                    View PDF
+                                  </a>
+                                ) : (
+                                  <span className="text-xs text-base-content/45">None</span>
+                                )}
+                              </td>
                               <td>{category.sort_order}</td>
                               <td>
                                 <span className="inline-flex items-center gap-1.5 text-xs font-medium">
@@ -1099,6 +1145,9 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                               </td>
                               <td className="text-right">
                                 <div className="flex items-center justify-end gap-1">
+                                  <button className="btn btn-ghost btn-xs text-primary" onClick={() => openCategoryCatalogueModal(category)} title="Attach or update default brochure PDF inherited by products in this collection">
+                                    Catalogue PDF
+                                  </button>
                                   <button className="btn btn-ghost btn-xs" disabled={Boolean(category.wordpress_source_id)} onClick={() => editCategory(category)} title={category.wordpress_source_id ? "Managed by WooCommerce; edit it there, then sync again" : "Edit"}>Edit</button>
                                   <button className="btn btn-ghost btn-xs" disabled={Boolean(category.wordpress_source_id)} title={category.wordpress_source_id ? "Managed by WooCommerce; change publication in WordPress" : category.is_published ? "Unpublish" : "Publish"} onClick={() => category.is_published ? void unpublish(`/admin/catalogue/categories/${category.id}/unpublish`) : void publish(`/admin/catalogue/categories/${category.id}/publish`)}>
                                     {category.is_published ? "Unpublish" : "Publish"}
@@ -1157,9 +1206,10 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       ))}
                     </div>
 
-                    <label className="input input-bordered input-sm flex items-center gap-2 max-w-sm rounded-lg">
+                    <label className="input input-bordered input-sm flex w-full min-w-0 items-center gap-2 rounded-lg sm:w-80">
                       <span aria-hidden="true" className="text-base-content/40">⌕</span>
                       <input
+                        className="min-w-0 flex-1"
                         placeholder="Search name, company, email, phone, GST..."
                         value={query}
                         onChange={(event) => setQuery(event.target.value)}
@@ -1170,8 +1220,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
 
                   {/* Thumper Table */}
                   <div className="overflow-x-auto">
-                    <table className="table w-full text-sm">
-                      <thead className="bg-base-200/50 text-xs text-base-content/70 border-b border-base-200 uppercase tracking-wider">
+                    <table className="table content-table w-full">
+                      <thead>
                         <tr>
                           <th>Customer Name</th>
                           <th>Account Role</th>
@@ -1391,7 +1441,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         <span className={`badge ${record.status === "new" ? "badge-warning" : record.status === "resolved" || record.status === "closed" ? "badge-success" : "badge-info"}`}>{record.status.replaceAll("_", " ")}</span>
                       </header>
                       <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-                        <div className="space-y-2 text-sm leading-6 text-base-content/75">
+                          <div className="space-y-2 text-sm leading-6 text-base-content/75">
                           <div className="flex flex-wrap gap-x-4 gap-y-1">
                             <a className="link link-primary" href={`mailto:${encodeURIComponent(record.email)}`}>{record.email}</a>
                             <a className="link link-primary" href={`tel:${encodeURIComponent(record.phone)}`}>{record.phone}</a>
@@ -1491,7 +1541,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   <div>
                     <p className="eyebrow">CATALOGUE SOURCE</p>
                     <h1>WooCommerce Sync & Integration</h1>
-                    <p>Pull published products from authenticated WooCommerce REST, or use the public Store API when REST keys are unavailable.</p>
+                    <p>Sync product data through authenticated WooCommerce REST, with the public Store API available as a read-only fallback.</p>
                   </div>
                   <div className="page-actions">
                     <button className="btn btn-outline" disabled={wpConnectionLoading} onClick={() => void wordpressPreview()}>Preview Source</button>
@@ -1502,17 +1552,18 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   <header className="panel-head">
                     <div>
                       <h2>WooCommerce Connection</h2>
-                      <p>Uses authenticated REST when configured, with a public Store API fallback and product PDF discovery.</p>
+                      <p>Authenticated REST is preferred; the public Store API can provide basic catalogue data without REST keys.</p>
                     </div>
                   </header>
                   <div className="p-5">
                     <div className={`alert text-sm mb-4 ${wpSyncReady ? "alert-success" : "alert-warning"}`} role="status">
                       <div>
-                        <strong>{wpConnectionLoading ? "Checking WooCommerce settings…" : wpSyncReady ? "WooCommerce settings are present" : "WooCommerce sync is not ready"}</strong>
+                        <strong>{wpConnectionLoading ? "Checking WooCommerce settings…" : wpSyncReady ? wpConnection?.authenticated ? "WooCommerce REST settings are present" : "Public Store API fallback is available" : "WooCommerce sync is not ready"}</strong>
                         <p className="mt-1">{wpConnection?.message ?? "The API connection could not be checked. Refresh this page or check the API deployment."}</p>
                         {wpConnection?.site && <p className="mt-1 break-all">Source: {wpConnection.site}</p>}
-                        {wpSyncReady && <p className="mt-1">Settings are present. Use Preview Source to confirm that the live WordPress endpoints and credentials work.</p>}
-                        {!wpSyncReady && !wpConnectionLoading && <p className="mt-1">In Coolify → API environment variables, set <code>WORDPRESS_API_BASE_URL</code>, <code>WORDPRESS_CONSUMER_KEY</code>, and <code>WORDPRESS_CONSUMER_SECRET</code>. The URL must be your WordPress source followed by <code>/wp-json</code>. Keep the key and secret in Coolify; do not paste them in CMS or chat.</p>}
+                        {wpSyncReady && wpConnection?.authenticated && <p className="mt-1">Settings are present. Use Preview Source to confirm that the live WordPress endpoints and credentials work.</p>}
+                        {wpSyncReady && !wpConnection?.authenticated && <p className="mt-1">Sync uses the public Store API for basic catalogue data. Add REST keys in Coolify to access the full WooCommerce product and category fields; keys must stay server-side.</p>}
+                        {!wpSyncReady && !wpConnectionLoading && <p className="mt-1">In Coolify → API environment variables, set <code>WORDPRESS_API_BASE_URL</code> and a valid <code>WORDPRESS_STORE_PRODUCTS_PATH</code>, or configure the authenticated WooCommerce product/category routes and consumer key/secret. Keep credentials in Coolify; do not paste them in CMS or chat.</p>}
                       </div>
                     </div>
                     <div className="alert alert-info text-sm mb-4">
@@ -1716,7 +1767,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
       {/* EDIT/CREATE CATEGORY MODAL */}
       {showCategoryForm && (
         <dialog open className="modal modal-open">
-          <div className="modal-box max-w-2xl">
+          <div className="modal-box max-h-[90dvh] overflow-y-auto max-w-2xl">
             <h2 className="text-xl font-bold">{editingCategory ? "Edit Category / Collection" : "New Collection"}</h2>
             <p className="mb-4 mt-1 text-sm text-base-content/60">Changes are saved as drafts and published to the customer mobile app.</p>
             <form onSubmit={submitCategory} className="grid gap-3 sm:grid-cols-2">
@@ -1745,20 +1796,90 @@ export default function AdminShell({ user, role }: { user: User; role: string })
         </dialog>
       )}
 
+      {/* COLLECTION CATALOGUE PDF MODAL */}
+      {cataloguePdfTarget && (
+        <dialog open className="modal modal-open">
+          <div className="modal-box max-h-[90dvh] overflow-y-auto max-w-lg">
+            <h2 className="text-xl font-bold">Collection Catalogue PDF</h2>
+            <p className="mb-4 mt-1 text-sm text-base-content/60">
+              Products in <strong>{cataloguePdfTarget.name}</strong> without a product-specific PDF inherit this brochure automatically, and future WooCommerce syncs preserve it.
+            </p>
+            <form onSubmit={saveCategoryCataloguePdf} className="grid gap-3">
+              <label className="form-control gap-1">
+                <span className="label-text font-semibold">Brochure Title</span>
+                <input className="input input-bordered" required maxLength={180} value={cataloguePdfTitle} onChange={(e) => setCataloguePdfTitle(e.target.value)} />
+              </label>
+              <label className="form-control gap-1">
+                <span className="label-text font-semibold">Catalogue PDF HTTPS URL</span>
+                <input className="input input-bordered" type="url" required placeholder="https://…" value={cataloguePdfUrl} onChange={(e) => setCataloguePdfUrl(e.target.value)} />
+              </label>
+              <label className="form-control gap-1">
+                <span className="label-text font-semibold">Or upload a PDF brochure (max 20 MB)</span>
+                <input
+                  className="file-input file-input-bordered file-input-sm w-full"
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  disabled={cataloguePdfUploading}
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0];
+                    const authUser = getFirebaseAuth()?.currentUser;
+                    if (!file || !authUser) return;
+                    setCataloguePdfUploading(true);
+                    setError("");
+                    try {
+                      const asset = await uploadMedia(authUser, file);
+                      setCataloguePdfUrl(asset.url);
+                    } catch (cause) {
+                      setError(cause instanceof Error ? cause.message : "PDF upload failed.");
+                    } finally {
+                      setCataloguePdfUploading(false);
+                      event.target.value = "";
+                    }
+                  }}
+                />
+                {cataloguePdfUploading && <span className="label-text-alt">Uploading PDF…</span>}
+              </label>
+              <div className="modal-action">
+                <button type="button" className="btn btn-ghost" onClick={() => setCataloguePdfTarget(null)}>Cancel</button>
+                <button className="btn btn-primary" disabled={cataloguePdfUploading}>Save Catalogue PDF</button>
+              </div>
+            </form>
+          </div>
+          <form method="dialog" className="modal-backdrop"><button onClick={() => setCataloguePdfTarget(null)}>close</button></form>
+        </dialog>
+      )}
+
       {/* EDIT/CREATE PRODUCT MODAL */}
       {showProductForm && (
         <dialog open className="modal modal-open">
-          <div className="modal-box max-w-3xl">
+          <div className="modal-box max-h-[90dvh] overflow-y-auto max-w-3xl">
             <h2 className="text-xl font-bold">{editingProduct ? "Edit Product" : "New Product"}</h2>
             <p className="mb-4 mt-1 text-sm text-base-content/60">Configure product specifications, images, and downloadable PDF datasheets.</p>
             <form onSubmit={submitProduct} className="grid gap-3 sm:grid-cols-2">
               <label className="form-control gap-1">
                 <span className="label-text font-semibold">Collection / Category</span>
-                <select className="select select-bordered" required value={productForm.category_id} onChange={(event) => setProductForm({ ...productForm, category_id: event.target.value })}>
+                <select className="select select-bordered" required value={productForm.category_id} onChange={(event) => { const category_id = event.target.value; setProductForm({ ...productForm, category_id, category_ids: [...new Set([category_id, ...(productForm.category_ids ?? []).filter((id) => id !== productForm.category_id)])] }); }}>
                   <option value="">Choose a category</option>
                   {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                 </select>
               </label>
+              <fieldset className="form-control gap-2 sm:col-span-2">
+                <legend className="label-text font-semibold">Also show in collections</legend>
+                <p className="text-xs text-base-content/60">Choose every collection where this product should appear in the app.</p>
+                <div className="grid max-h-48 grid-cols-1 gap-1 overflow-y-auto rounded-lg border border-base-300 p-2 sm:grid-cols-2">
+                  {categories.map((category) => {
+                    const checked = category.id === productForm.category_id || (productForm.category_ids ?? []).includes(category.id);
+                    return <label key={category.id} className="label flex cursor-pointer justify-start gap-2 rounded-md px-2 py-1">
+                      <input className="checkbox checkbox-sm checkbox-primary" type="checkbox" checked={checked} disabled={category.id === productForm.category_id} onChange={(event) => {
+                        const current = new Set([productForm.category_id, ...(productForm.category_ids ?? [])].filter(Boolean));
+                        if (event.target.checked) current.add(category.id); else current.delete(category.id);
+                        setProductForm({ ...productForm, category_ids: [...current] });
+                      }} />
+                      <span className="label-text">{category.name}{category.id === productForm.category_id ? " · primary" : ""}</span>
+                    </label>;
+                  })}
+                </div>
+              </fieldset>
               {(["name", "slug", "model_code", "summary", "source_reference"] as const).map((field) => (
                 <label key={field} className={`form-control gap-1 ${["summary", "source_reference"].includes(field) ? "sm:col-span-2" : ""}`}>
                   <span className="label-text font-semibold">{humanize(field)}</span>
@@ -1799,7 +1920,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                 <span className="label-text font-semibold">Specifications (JSON Object)</span>
                 <textarea className="textarea textarea-bordered font-mono text-xs" value={specificationsText} onChange={(event) => { setSpecificationsText(event.target.value); try { const parsed = JSON.parse(event.target.value); if (parsed == null || Array.isArray(parsed) || typeof parsed !== "object") throw new Error(); setProductForm({ ...productForm, specifications: parsed as Record<string, unknown> }); setSpecificationsError(""); } catch { setSpecificationsError("Specifications must be a valid JSON object."); } }} />{specificationsError && <span role="alert" className="text-xs text-error">{specificationsError}</span>}
               </label>
-              <div className="sm:col-span-2"><ContentComparison defaultOpen={false} draft={{ category_id: productForm.category_id, slug: productForm.slug, name: productForm.name, model_code: productForm.model_code, summary: productForm.summary, description: productForm.description, applications: productForm.applications, features: productForm.features, specifications: productForm.specifications, image_url: productForm.image_url, gallery_images: productForm.gallery_images, price_minor: productForm.price_minor, currency_code: productForm.currency_code, currency_minor_unit: productForm.currency_minor_unit, stock_status: productForm.stock_status, stock_quantity: productForm.stock_quantity, documents: productForm.documents, source_reference: productForm.source_reference, wordpress_source_id: productForm.wordpress_source_id, wordpress_source_url: productForm.wordpress_source_url }} published={"published_payload" in productForm ? productForm.published_payload ?? null : null} /></div>
+              <div className="sm:col-span-2"><ContentComparison defaultOpen={false} draft={{ category_id: productForm.category_id, category_ids: productForm.category_ids, slug: productForm.slug, name: productForm.name, model_code: productForm.model_code, summary: productForm.summary, description: productForm.description, applications: productForm.applications, features: productForm.features, specifications: productForm.specifications, image_url: productForm.image_url, gallery_images: productForm.gallery_images, price_minor: productForm.price_minor, currency_code: productForm.currency_code, currency_minor_unit: productForm.currency_minor_unit, stock_status: productForm.stock_status, stock_quantity: productForm.stock_quantity, documents: productForm.documents, source_reference: productForm.source_reference, wordpress_source_id: productForm.wordpress_source_id, wordpress_source_url: productForm.wordpress_source_url }} published={"published_payload" in productForm ? productForm.published_payload ?? null : null} /></div>
               <div className="modal-action sm:col-span-2">
                 <button type="button" className="btn btn-ghost" onClick={() => setShowProductForm(false)}>Close</button>
                 <button className="btn btn-primary">Save Product</button>
@@ -1813,7 +1934,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
       {/* EDIT/CREATE KNOWLEDGE MODAL */}
       {showKnowledgeForm && (
         <dialog open className="modal modal-open">
-          <div className="modal-box max-w-2xl">
+          <div className="modal-box max-h-[90dvh] overflow-y-auto max-w-2xl">
             <h2 className="text-xl font-bold">{editingKnowledge ? "Edit Support Answer" : "New Support Answer"}</h2>
             <form onSubmit={submitKnowledge} className="grid gap-3 sm:grid-cols-2">
               <label className="form-control gap-1"><span className="label-text">Question Title</span><input className="input input-bordered" required minLength={3} value={knowledgeForm.title} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, title: e.target.value })} /></label>
@@ -1892,6 +2013,28 @@ function ImageUrlField({ value, onChange }: { value: string; onChange: (value: s
 function ContentField({ field, value, categories, products, onChange }: { field: string; value: unknown; categories: Category[]; products: Product[]; onChange: (value: unknown) => void }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const homeSections = [
+    ["categories", "Categories"],
+    ["featured_products", "Featured products"],
+    ["requests", "Requests"],
+    ["announcements", "Announcements"],
+  ] as const;
+  if (field === "section_order") {
+    const current = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && homeSections.some(([key]) => key === item)) : [];
+    const ordered = [...new Set([...current, ...homeSections.map(([key]) => key)])];
+    const move = (index: number, delta: number) => {
+      const target = index + delta;
+      if (target < 0 || target >= ordered.length) return;
+      const next = [...ordered];
+      [next[index], next[target]] = [next[target], next[index]];
+      onChange(next);
+    };
+    return <fieldset className="form-control min-w-0 gap-2 sm:col-span-2"><legend className="font-semibold">Home section order</legend><p className="text-xs text-base-content/60">Choose the order shown on the customer app Home screen.</p><ol className="grid gap-2">{ordered.map((key, index) => <li key={key} className="flex min-w-0 items-center gap-3 rounded-box border border-base-300 p-2"><span className="badge badge-neutral">{index + 1}</span><span className="min-w-0 flex-1">{homeSections.find(([section]) => section === key)?.[1] ?? key}</span><button type="button" className="btn btn-square btn-sm btn-ghost" aria-label={`Move ${key} up`} disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button type="button" className="btn btn-square btn-sm btn-ghost" aria-label={`Move ${key} down`} disabled={index === ordered.length - 1} onClick={() => move(index, 1)}>↓</button></li>)}</ol></fieldset>;
+  }
+  if (field === "visible_sections") {
+    const selected = new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+    return <fieldset className="form-control min-w-0 gap-2 sm:col-span-2"><legend className="font-semibold">Visible Home sections</legend><p className="text-xs text-base-content/60">Choose which sections customers can see. Hidden sections keep their saved content.</p><div className="grid gap-2 sm:grid-cols-2">{homeSections.map(([key, label]) => <label key={key} className="label cursor-pointer justify-start gap-3 rounded-box border border-base-300 p-3"><input className="checkbox checkbox-primary" type="checkbox" checked={selected.has(key)} onChange={(event) => { const next = new Set(selected); if (event.target.checked) next.add(key); else next.delete(key); onChange(homeSections.map(([section]) => section).filter((section) => next.has(section))); }} /><span className="label-text">{label}</span></label>)}</div></fieldset>;
+  }
   if (typeof value === "boolean") return <label className="label cursor-pointer justify-start gap-3 rounded-lg border border-base-300 p-3"><input className="toggle toggle-primary" type="checkbox" checked={value} onChange={(event) => onChange(event.target.checked)} /><span className="label-text">{humanize(field)}</span></label>;
   if (field === "featured_category_ids" || field === "featured_product_ids") {
     const options = (field === "featured_category_ids" ? categories : products).filter((item) => item.is_published);
@@ -1911,4 +2054,3 @@ function ContentField({ field, value, categories, products, onChange }: { field:
   const inputId = `content-${field}`;
   return <div className={`min-w-0 ${long ? "sm:col-span-2" : ""}`}><label className="mb-1 block text-sm font-semibold" htmlFor={inputId}>{humanize(field)}</label>{long ? <textarea id={inputId} className="textarea textarea-bordered min-h-20 w-full" value={textValue(value)} onChange={(event) => onChange(event.target.value)} /> : <input id={inputId} className="input input-bordered w-full" type={inputType} value={textValue(value)} onChange={(event) => onChange(event.target.value)} />}</div>;
 }
-

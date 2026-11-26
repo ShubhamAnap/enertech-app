@@ -188,7 +188,9 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
             msg.contains('hash') ||
             msg.contains('fingerprint');
         setState(() {
-          _error = _authMessage(error);
+          _error = isHashError
+              ? 'Google sign-in could not verify this build’s signing certificate. Register its release SHA-1 in Firebase, refresh the Android Firebase config, and install a build made with that config.'
+              : _authMessage(error);
           _showShaNotice = isHashError;
         });
       }
@@ -202,7 +204,7 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
             errStr.contains('sign_in_failed');
         setState(() {
           _error = isHashError
-              ? 'Google Sign-In needs this app’s SHA-1 certificate fingerprint registered in Firebase Console.'
+              ? 'Google sign-in could not verify this build’s signing certificate. Register its release SHA-1 in Firebase, refresh the Android Firebase config, and install a build made with that config.'
               : 'Google sign-in could not be completed ($e). Please use email and password instead.';
           _showShaNotice = isHashError;
         });
@@ -258,7 +260,9 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                 const _BrandMark(),
                 const SizedBox(height: 24),
                 Text(
-                  _creating ? 'Create your account' : 'Welcome to EnerTech',
+                  _creating
+                      ? 'Create your account'
+                      : 'Welcome to ${BrandIdentity.companyName}',
                   style: const TextStyle(
                     fontSize: 26,
                     fontWeight: FontWeight.w800,
@@ -284,7 +288,7 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                 if (_showShaNotice) ...[
                   const SizedBox(height: 12),
                   const NoticeCard(
-                    message: 'Google Sign-In needs a SHA-1 fingerprint for this build registered in Firebase. Ask the release administrator to add the matching signing certificate in Firebase Console.',
+                    message: 'In Firebase Console, open Project settings → General → Your apps → this Android app → SHA certificate fingerprints. Add the release APK’s SHA-1, save, download the refreshed google-services.json, then rebuild and install the APK.',
                   ),
                 ],
 
@@ -1041,28 +1045,14 @@ class _LoadingPage extends StatelessWidget {
 class _BrandMark extends StatelessWidget {
   const _BrandMark();
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisAlignment: MainAxisAlignment.center,
-    children: [
-      Container(
-        width: 42,
-        height: 42,
-        decoration: BoxDecoration(
-          color: AppColors.navy,
-          borderRadius: BorderRadius.circular(13),
-        ),
-        child: const Icon(Icons.bolt_rounded, color: Colors.white, size: 25),
-      ),
-      const SizedBox(width: 10),
-      const Text(
-        'EnerTech',
-        style: TextStyle(
-          color: AppColors.navy,
-          fontWeight: FontWeight.w800,
-          fontSize: 20,
-        ),
-      ),
-    ],
+  Widget build(BuildContext context) => Center(
+    child: Image.asset(
+      'assets/brand/enertech_logo.png',
+      width: 232,
+      height: 72,
+      fit: BoxFit.contain,
+      semanticLabel: '${BrandIdentity.companyName} — Answering All Power Needs',
+    ),
   );
 }
 

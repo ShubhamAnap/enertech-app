@@ -344,4 +344,3 @@ class _ComparisonRow {
   final String label;
   final List<String> values;
 }
-

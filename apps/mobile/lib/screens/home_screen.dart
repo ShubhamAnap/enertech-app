@@ -42,84 +42,32 @@ class HomeScreen extends StatelessWidget {
           children: [
             Row(
               children: [
-                FutureBuilder<Map<String, dynamic>>(
-                  future: appContent,
-                  builder: (context, snapshot) {
-                    final brand = snapshot.data?['brand'] is Map
-                        ? snapshot.data!['brand'] as Map
-                        : const <String, dynamic>{};
-                    final logo = brand['logo_url'] as String?;
-                    return Container(
-                      width: 38,
-                      height: 38,
-                      clipBehavior: Clip.antiAlias,
-                      decoration: BoxDecoration(
-                        color: AppColors.navy,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: logo == null || logo.isEmpty
-                          ? const Center(
-                              child: Text(
-                                'E',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 19,
-                                ),
-                              ),
-                            )
-                          : Image.network(
-                              logo,
-                              fit: BoxFit.contain,
-                              errorBuilder: (_, _, _) => const Center(
-                                child: Text(
-                                  'E',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 19,
-                                  ),
-                                ),
-                              ),
-                            ),
-                    );
-                  },
+                Image.asset(
+                  'assets/brand/enertech_logo.png',
+                  width: 116,
+                  height: 38,
+                  fit: BoxFit.contain,
+                  semanticLabel: 'EnerTech logo',
                 ),
                 const SizedBox(width: 10),
-                Expanded(
-                  child: FutureBuilder<Map<String, dynamic>>(
-                    future: appContent,
-                    builder: (context, snapshot) {
-                      final brand = snapshot.data?['brand'] is Map
-                          ? snapshot.data!['brand'] as Map
-                          : const <String, dynamic>{};
-                      final name =
-                          brand['display_name'] is String &&
-                              (brand['display_name'] as String).isNotEmpty
-                          ? brand['display_name'] as String
-                          : 'EnerTech';
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Welcome to',
-                            style: TextStyle(
-                              color: AppColors.muted,
-                              fontSize: 11,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            name,
-                            style: const TextStyle(
-                              color: AppColors.ink,
-                              fontSize: 17,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ],
-                      );
-                    },
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Welcome to',
+                        style: TextStyle(color: AppColors.muted, fontSize: 11),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        BrandIdentity.companyName,
+                        style: TextStyle(
+                          color: AppColors.ink,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 IconButton(

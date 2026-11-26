@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     wordpress_categories_path: str = "wc/v3/products/categories"
     wordpress_store_products_path: str = "wc/store/v1/products"
     wordpress_documents_path: str = "wp/v2/media"
+    wordpress_wp_products_path: str = "wp/v2/product"
+    wordpress_wp_categories_path: str = "wp/v2/product_cat"
+    wordpress_per_page: int = 20
     wordpress_consumer_key: str = ""
     wordpress_consumer_secret: str = ""
     wordpress_username: str = ""

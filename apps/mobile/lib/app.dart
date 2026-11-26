@@ -9,7 +9,7 @@ class EnerTechApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'EnerTech',
+      title: BrandIdentity.companyName,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       home: const CustomerEntryGate(),

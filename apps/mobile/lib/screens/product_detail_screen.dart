@@ -40,7 +40,14 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(widget.category), leading: const BackButton()),
+    appBar: AppBar(
+      title: Text(
+        widget.product.name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      leading: const BackButton(),
+    ),
     body: FutureBuilder<ProductDetails>(
       future: _detail,
       builder: (context, snapshot) {
@@ -214,13 +221,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             ],
             if ((product?.description ?? '').isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(
-                formatProductDescription(product!.description!),
-                style: const TextStyle(
-                  color: AppColors.muted,
-                  fontSize: 13,
-                  height: 1.5,
-                ),
+              _ProductDescription(
+                text: formatProductDescription(product!.description!),
               ),
             ],
             if ((product?.priceMinor ?? widget.product.priceMinor) != null) ...[
@@ -390,8 +392,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               ),
             ),
             const SizedBox(height: 9),
-            if (product?.documents.isNotEmpty == true)
-              ...product!.documents.map(
+            if ((product?.documents ?? widget.product.documents).isNotEmpty)
+              ...(product?.documents ?? widget.product.documents).map(
                 (document) => Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Card(
@@ -522,3 +524,66 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   };
 }
 
+class _ProductDescription extends StatelessWidget {
+  const _ProductDescription({required this.text});
+  final String text;
+
+  static final _heading = RegExp(
+    r'^(Product Overview|Key Features|Technical Specifications|Specifications|Applications)$',
+    caseSensitive: false,
+  );
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      for (final line in text.split('\n'))
+        if (line.trim().isEmpty)
+          const SizedBox(height: 8)
+        else if (_heading.hasMatch(line.trim()))
+          Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 3),
+            child: Text(
+              line.trim(),
+              style: const TextStyle(
+                color: AppColors.ink,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          )
+        else if (line.trimLeft().startsWith('• '))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 5),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: 3, right: 7),
+                  child: Icon(Icons.circle, size: 6, color: AppColors.blue),
+                ),
+                Expanded(
+                  child: Text(
+                    line.trimLeft().substring(2),
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 13,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          Text(
+            line.trim(),
+            style: const TextStyle(
+              color: AppColors.muted,
+              fontSize: 13,
+              height: 1.5,
+            ),
+          ),
+    ],
+  );
+}

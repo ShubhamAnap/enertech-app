@@ -9,9 +9,13 @@ class CustomerAuthService {
   static Future<void>? _googleInitialization;
 
   Future<UserCredential?> signInWithGoogle() async {
-    final clientId =
-        (dotenv.isInitialized ? dotenv.env['GOOGLE_SERVER_CLIENT_ID'] : null)
-            ?.trim();
+    const compiledClientId = String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
+    final clientId = compiledClientId.trim().isNotEmpty
+        ? compiledClientId.trim()
+        : (dotenv.isInitialized
+                  ? dotenv.env['GOOGLE_SERVER_CLIENT_ID']
+                  : null)
+              ?.trim();
     if (clientId == null || clientId.isEmpty) {
       throw FirebaseAuthException(
         code: 'google-not-configured',

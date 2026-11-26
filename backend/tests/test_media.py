@@ -58,3 +58,33 @@ def test_media_upload_rejects_files_over_the_size_limit(monkeypatch) -> None:
         asyncio.run(media.upload_media(upload, session=Mock(), admin=admin))
 
     assert error.value.status_code == 413
+
+
+def test_media_upload_accepts_pdf_brochures(monkeypatch) -> None:
+    settings = SimpleNamespace(
+        supabase_url="https://storage.example.test",
+        supabase_service_role_key="test-server-key",
+        supabase_public_media_bucket="enertech-public",
+    )
+    monkeypatch.setattr(media, "get_settings", lambda: settings)
+
+    class AsyncStorageClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def put(self, url, **kwargs):
+            assert url.endswith(".pdf")
+            assert kwargs["headers"]["Content-Type"] == "application/pdf"
+            return httpx.Response(200)
+
+    monkeypatch.setattr(media.httpx, "AsyncClient", lambda **_kwargs: AsyncStorageClient())
+    session = Mock()
+    upload = UploadFile(filename="brochure.pdf", file=BytesIO(b"%PDF-1.7\ncontent"))
+    admin = AdminIdentity(uid="cms-admin", email="admin@example.test", name="CMS Admin", role="super_admin")
+
+    result = asyncio.run(media.upload_media(upload, session=session, admin=admin))
+    assert result.content_type == "application/pdf"
+    assert str(result.url).endswith(".pdf")

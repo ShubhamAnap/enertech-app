@@ -133,7 +133,7 @@ class CatalogueRepository {
     var filtered = cachedProducts.where((p) {
       if (category != null &&
           category.isNotEmpty &&
-          (cachedCategoryId == null || p.categoryId != cachedCategoryId)) {
+          (cachedCategoryId == null || !p.categoryIds.contains(cachedCategoryId))) {
         return false;
       }
       if (query.trim().isNotEmpty) {

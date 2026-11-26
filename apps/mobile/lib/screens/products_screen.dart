@@ -425,7 +425,7 @@ class _ProductCard extends StatelessWidget {
                   const SizedBox(height: 4),
                   Text(
                     product.name,
-                    maxLines: 2,
+                    maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: AppColors.ink,
@@ -518,4 +518,3 @@ String _stockLabel(String status) => switch (status) {
   'onbackorder' => 'Available on backorder',
   _ => '',
 };
-

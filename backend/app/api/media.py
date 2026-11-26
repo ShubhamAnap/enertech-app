@@ -10,12 +10,14 @@ from app.core.config import get_settings
 from app.db.session import get_session
 from app.models import AuditEvent
 
+ROUTER_TAG = "media library"
 router = APIRouter(prefix="/admin/media", tags=["media library"])
 EDITOR_ROLES = ("content_editor", "admin", "super_admin")
-MAX_FILE_BYTES = 10 * 1024 * 1024
+MAX_FILE_BYTES = 20 * 1024 * 1024
 ALLOWED_SIGNATURES = {
     "image/jpeg": (b"\xff\xd8\xff", ".jpg"),
     "image/png": (b"\x89PNG\r\n\x1a\n", ".png"),
+    "application/pdf": (b"%PDF-", ".pdf"),
 }
 
 
@@ -27,7 +29,7 @@ class MediaAssetPublic(BaseModel):
     size_bytes: int
 
 
-def _detect_image(payload: bytes) -> tuple[str, str] | None:
+def _detect_media(payload: bytes) -> tuple[str, str] | None:
     for content_type, (signature, extension) in ALLOWED_SIGNATURES.items():
         if payload.startswith(signature):
             return content_type, extension
@@ -47,11 +49,11 @@ async def upload_media(
         raise HTTPException(status_code=503, detail="Configure Supabase Storage server settings before uploading media")
     payload = await file.read(MAX_FILE_BYTES + 1)
     if not payload or len(payload) > MAX_FILE_BYTES:
-        raise HTTPException(status_code=413, detail="Choose an image smaller than 10 MB")
-    image = _detect_image(payload)
-    if image is None:
-        raise HTTPException(status_code=415, detail="Upload a PNG, JPEG, or WebP image")
-    content_type, extension = image
+        raise HTTPException(status_code=413, detail="Choose a file smaller than 20 MB")
+    detected = _detect_media(payload)
+    if detected is None:
+        raise HTTPException(status_code=415, detail="Upload a PNG, JPEG, WebP image, or PDF document")
+    content_type, extension = detected
     bucket = settings.supabase_public_media_bucket.strip()
     storage_path = f"cms/{uuid4().hex}{extension}"
     storage_url = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/{bucket}/{storage_path}"

@@ -469,4 +469,3 @@ class _SupportRow extends StatelessWidget {
     ),
   );
 }
-

@@ -1,10 +1,18 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, Uuid, func
+from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, String, Table, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+
+product_category_links = Table(
+    "product_category_links",
+    Base.metadata,
+    Column("product_id", Uuid, ForeignKey("products.id", ondelete="CASCADE"), primary_key=True),
+    Column("category_id", Uuid, ForeignKey("product_categories.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class ProductCategory(Base):
@@ -22,7 +30,31 @@ class ProductCategory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    products: Mapped[list["Product"]] = relationship(back_populates="category")
+    products: Mapped[list["Product"]] = relationship(back_populates="category", foreign_keys="Product.category_id")
+    categorized_products: Mapped[list["Product"]] = relationship(secondary=product_category_links, back_populates="categories")
+    catalogue_mapping: Mapped["ProductCategoryCatalogue | None"] = relationship(
+        back_populates="category",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class ProductCategoryCatalogue(Base):
+    """Stores category/product-family level PDF brochures for catalogue inheritance."""
+
+    __tablename__ = "product_category_catalogues"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    category_key: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    category_id: Mapped[UUID | None] = mapped_column(ForeignKey("product_categories.id", ondelete="CASCADE"), nullable=True, index=True)
+    wordpress_category_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(180), default="Category catalogue PDF")
+    catalog_pdf_url: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(40), default="cms")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    category: Mapped[ProductCategory | None] = relationship(back_populates="catalogue_mapping")
 
 
 class Product(Base):
@@ -56,4 +88,9 @@ class Product(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    category: Mapped[ProductCategory] = relationship(back_populates="products")
+    category: Mapped[ProductCategory] = relationship(back_populates="products", foreign_keys=[category_id])
+    categories: Mapped[list[ProductCategory]] = relationship(secondary=product_category_links, back_populates="categorized_products")
+
+    @property
+    def category_ids(self) -> list[UUID]:
+        return [category.id for category in self.categories] or [self.category_id]

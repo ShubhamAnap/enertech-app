@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -12,11 +13,13 @@ from sqlalchemy.pool import StaticPool
 
 import app.api.router as api_router
 import app.core.auth as auth
+import app.api.wordpress as wordpress_api
 from app.core.auth import Identity, get_current_identity
 from app.db.base import Base
 from app.db.session import get_session
 from app.main import app
-from app.models import AdminAccount, AppConfig, ContactInquiry, CustomerRequest, Product, ProductCategory
+from app.models import AdminAccount, AppConfig, ContactInquiry, CustomerProfile, CustomerRequest, Product, ProductCategory
+from app.core.auth import AdminIdentity
 
 
 @pytest.fixture
@@ -89,6 +92,30 @@ def test_customer_requests_are_scoped_to_the_verified_identity(client: TestClien
     rows = client.get("/api/v1/requests").json()
     assert len(rows) == 1
     assert rows[0]["id"] == second.json()["id"]
+
+
+def test_admin_request_includes_profile_matched_by_firebase_uid(client: TestClient) -> None:
+    admin = Identity("request-admin", "admin@example.test", "Admin", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: admin
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="request-admin", role="super_admin", is_active=True))
+        session.add(CustomerProfile(
+            firebase_uid="profile-customer", customer_type="end_user", name="Profile Customer",
+            mobile_number="+919876543210", email="profile@example.test", location="Pune",
+        ))
+        session.add_all([
+            CustomerRequest(customer_uid="profile-customer", customer_email="stale@example.test", kind="service", status="submitted", payload={"description": "Repair"}),
+            CustomerRequest(customer_uid="no-profile", customer_email="no-profile@example.test", kind="service", status="submitted", payload={"description": "Inspect"}),
+        ])
+        session.commit()
+
+    response = client.get("/api/v1/admin/requests?kind=service")
+    assert response.status_code == 200
+    by_email = {row["customer_email"]: row for row in response.json()}
+    assert by_email["stale@example.test"]["customer_name"] == "Profile Customer"
+    assert by_email["stale@example.test"]["customer_phone"] == "+919876543210"
+    assert by_email["stale@example.test"]["customer_location"] == "Pune"
+    assert by_email["no-profile@example.test"]["customer_name"] is None
 
 
 def test_quote_and_service_requests_share_per_account_rate_limit(client: TestClient) -> None:
@@ -249,9 +276,188 @@ def test_catalogue_can_fetch_published_featured_products_by_id(client: TestClien
     assert response.json()["total"] == 1
 
 
+def test_catalogue_keeps_all_product_category_memberships(client: TestClient) -> None:
+    with Session(api_router.engine) as session:
+        primary = ProductCategory(slug="multi-primary", name="Primary", is_published=True)
+        secondary = ProductCategory(slug="multi-secondary", name="Secondary", is_published=True)
+        hidden = ProductCategory(slug="multi-hidden", name="Hidden", is_published=False)
+        session.add_all([primary, secondary, hidden])
+        session.flush()
+        product = Product(slug="multi-category-product", name="Multi category", category_id=primary.id, categories=[primary, secondary, hidden], is_published=True)
+        session.add(product)
+        session.commit()
+        product_id = product.id
+        expected_category_ids = {str(primary.id), str(secondary.id), str(hidden.id)}
+
+    primary_result = client.get("/api/v1/catalogue/products?category=multi-primary").json()
+    secondary_result = client.get("/api/v1/catalogue/products?category=multi-secondary").json()
+    hidden_result = client.get("/api/v1/catalogue/products?category=multi-hidden").json()
+    assert [row["id"] for row in primary_result["items"]] == [str(product_id)]
+    assert [row["id"] for row in secondary_result["items"]] == [str(product_id)]
+    assert hidden_result["items"] == []
+    assert set(primary_result["items"][0]["category_ids"]) == expected_category_ids
+
+
+def test_cms_product_create_edit_publish_keeps_multiple_collections(client: TestClient) -> None:
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="catalogue-admin", role="admin", is_active=True))
+        categories = [
+            ProductCategory(slug=f"cms-multi-{index}", name=f"CMS collection {index}", is_published=True)
+            for index in range(3)
+        ]
+        session.add_all(categories)
+        session.commit()
+        category_ids = [str(category.id) for category in categories]
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "catalogue-admin", "admin@example.test", "Admin", {"email_verified": True}
+    )
+
+    response = client.post("/api/v1/admin/catalogue/products", json={
+        "category_id": category_ids[0], "category_ids": category_ids[:2],
+        "slug": "cms-multi-collection", "name": "CMS multi collection product",
+        "source_reference": "verified test source",
+    })
+    assert response.status_code == 201, response.text
+    product = response.json()
+    assert set(product["category_ids"]) == set(category_ids[:2])
+
+    updated = client.patch(f"/api/v1/admin/catalogue/products/{product['id']}", json={
+        "category_ids": category_ids,
+    })
+    assert updated.status_code == 200, updated.text
+    assert set(updated.json()["category_ids"]) == set(category_ids)
+
+    published = client.post(f"/api/v1/admin/catalogue/products/{product['id']}/publish")
+    assert published.status_code == 200, published.text
+    assert set(published.json()["category_ids"]) == set(category_ids)
+    public_catalogue = client.get("/api/v1/catalogue/products?category=cms-multi-2")
+    assert public_catalogue.status_code == 200
+    assert [item["id"] for item in public_catalogue.json()["items"]] == [product["id"]]
+
+
+def test_woocommerce_sync_imports_all_product_categories(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = SimpleNamespace(
+        wordpress_api_base_url="https://store.example.test/wp-json",
+        wordpress_products_path="wc/v3/products",
+        wordpress_categories_path="wc/v3/products/categories",
+        wordpress_store_products_path="wc/store/v1/products",
+        wordpress_documents_path="",
+        wordpress_consumer_key="consumer-key",
+        wordpress_consumer_secret="consumer-secret",
+        wordpress_source_title_field="name",
+        wordpress_source_slug_field="slug",
+        wordpress_source_summary_field="short_description",
+        wordpress_source_description_field="description",
+        wordpress_source_model_field="sku",
+        wordpress_source_image_field="images.0.src",
+        wordpress_source_specifications_field="attributes",
+        wordpress_source_applications_field="",
+        wordpress_source_features_field="",
+    )
+    rows = {
+        "wc/v3/products": [
+            {
+                "id": 913, "name": "Woo multi-category product", "slug": "woo-multi-category-product",
+                "sku": "WMC-913", "description": "<p>Product copy</p>", "short_description": "",
+                "permalink": "https://store.example.test/product/woo-multi-category-product/",
+                "images": [{"src": "https://store.example.test/product.png"}],
+                "categories": [{"id": 41}, {"id": 42}], "attributes": [], "price": "125.00",
+                "stock_status": "instock",
+            },
+            {
+                "id": 914, "name": "Woo uncategorized product", "slug": "woo-uncategorized-product",
+                "sku": "WUC-914", "description": "", "short_description": "",
+                "permalink": "https://store.example.test/product/woo-uncategorized-product/",
+                "images": [], "categories": [], "attributes": [], "price": "0", "stock_status": "unknown",
+            },
+        ],
+        "wc/v3/products/categories": [
+            {"id": 41, "name": "Solar", "slug": "solar"},
+            {"id": 42, "name": "Hybrid", "slug": "hybrid"},
+        ],
+        "wc/store/v1/products": [],
+    }
+    monkeypatch.setattr(wordpress_api, "get_settings", lambda: settings)
+    monkeypatch.setattr(wordpress_api, "_fetch_all", lambda path, **_kwargs: rows.get(path, []))
+    with Session(api_router.engine) as session:
+        result = wordpress_api.sync_woocommerce_catalogue(session, AdminIdentity("admin-uid", None, "Admin", "super_admin"))
+        product = session.query(Product).filter_by(wordpress_source_id="913").one()
+        expected_slugs = {"solar", "hybrid"}
+        assert {category.slug for category in product.categories} == expected_slugs
+        uncategorized = session.query(Product).filter_by(wordpress_source_id="914").one()
+        assert [category.slug for category in uncategorized.categories] == ["uncategorized"]
+        assert result["created"] == 2
+
+
+def test_woocommerce_sync_falls_back_to_public_store_api_without_rest_keys(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = SimpleNamespace(
+        wordpress_api_base_url="https://store.example.test/wp-json",
+        wordpress_products_path="wc/v3/products",
+        wordpress_categories_path="wc/v3/products/categories",
+        wordpress_store_products_path="wc/store/v1/products",
+        wordpress_documents_path="",
+        wordpress_consumer_key="",
+        wordpress_consumer_secret="",
+        wordpress_source_title_field="name",
+        wordpress_source_slug_field="slug",
+        wordpress_source_summary_field="short_description",
+        wordpress_source_description_field="description",
+        wordpress_source_model_field="sku",
+        wordpress_source_image_field="images.0.src",
+        wordpress_source_specifications_field="attributes",
+        wordpress_source_applications_field="",
+        wordpress_source_features_field="",
+    )
+    public_product = {
+        "id": 991, "name": "Public API Solar Product", "slug": "public-api-solar-product",
+        "sku": "PUBLIC-991", "description": "A public Store API product", "short_description": "Solar",
+        "permalink": "https://store.example.test/product/public-api-solar-product/",
+        "images": [{"src": "https://store.example.test/uploads/public-product.png"}],
+        "categories": [{"id": 71, "name": "Public Solar", "slug": "public-solar"}],
+        "prices": {"price": "129900", "regular_price": "149900", "sale_price": "129900", "currency_code": "INR", "currency_minor_unit": 2},
+        "is_in_stock": True,
+    }
+    monkeypatch.setattr(wordpress_api, "get_settings", lambda: settings)
+
+    def fetch(path: str, *, authenticated: bool, extra_params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        assert authenticated is False
+        assert path == "wc/store/v1/products"
+        return [public_product]
+
+    monkeypatch.setattr(wordpress_api, "_fetch_all", fetch)
+    with Session(api_router.engine) as session:
+        result = wordpress_api.sync_woocommerce_catalogue(session, AdminIdentity("admin-uid", None, "Admin", "super_admin"))
+        product = session.query(Product).filter_by(wordpress_source_id="991").one()
+        assert product.name == "Public API Solar Product"
+        assert product.price_minor == 129900
+        assert product.currency_code == "INR"
+        assert product.image_url == "https://store.example.test/uploads/public-product.png"
+        assert [category.slug for category in product.categories] == ["public-solar"]
+        assert result["created"] == 1
+
+
 def test_catalogue_rejects_invalid_featured_product_ids(client: TestClient) -> None:
     assert client.get("/api/v1/catalogue/products?ids=not-a-uuid").status_code == 422
     assert client.get("/api/v1/catalogue/products?ids=" + ",".join(str(uuid4()) for _ in range(13))).status_code == 422
+
+
+def test_woocommerce_catalogue_rows_cannot_be_edited_published_or_deleted_in_cms(client: TestClient) -> None:
+    category_id, product_id = uuid4(), uuid4()
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="catalogue-admin", role="admin", is_active=True))
+        session.add(ProductCategory(id=category_id, slug="wp-read-only", name="WooCommerce collection", wordpress_source_id="wp-category-90", is_published=True))
+        session.add(Product(id=product_id, category_id=category_id, slug="wp-read-only-product", name="WooCommerce product", wordpress_source_id="wp-product-90", is_published=True))
+        session.commit()
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "catalogue-admin", "admin@example.test", "Admin", {"email_verified": True}
+    )
+
+    assert client.patch(f"/api/v1/admin/catalogue/products/{product_id}", json={"name": "Local override"}).status_code == 409
+    assert client.post(f"/api/v1/admin/catalogue/products/{product_id}/publish").status_code == 409
+    assert client.delete(f"/api/v1/admin/catalogue/products/{product_id}").status_code == 409
+    assert client.patch(f"/api/v1/admin/catalogue/categories/{category_id}", json={"name": "Local override"}).status_code == 409
+    assert client.post(f"/api/v1/admin/catalogue/categories/{category_id}/publish").status_code == 409
+    assert client.delete(f"/api/v1/admin/catalogue/categories/{category_id}").status_code == 409
 
 
 def test_admin_product_page_accepts_product_admin_items(client: TestClient) -> None:
@@ -277,25 +483,6 @@ def test_admin_product_page_accepts_product_admin_items(client: TestClient) -> N
     assert response.status_code == 200
     assert response.json()["total"] == 1
     assert response.json()["items"][0]["id"] == str(product_id)
-
-
-def test_woocommerce_catalogue_rows_cannot_be_edited_published_or_deleted_in_cms(client: TestClient) -> None:
-    category_id, product_id = uuid4(), uuid4()
-    with Session(api_router.engine) as session:
-        session.add(AdminAccount(firebase_uid="catalogue-admin", role="admin", is_active=True))
-        session.add(ProductCategory(id=category_id, slug="wp-read-only", name="WooCommerce collection", wordpress_source_id="wp-category-90", is_published=True))
-        session.add(Product(id=product_id, category_id=category_id, slug="wp-read-only-product", name="WooCommerce product", wordpress_source_id="wp-product-90", is_published=True))
-        session.commit()
-    app.dependency_overrides[get_current_identity] = lambda: Identity(
-        "catalogue-admin", "admin@example.test", "Admin", {"email_verified": True}
-    )
-
-    assert client.patch(f"/api/v1/admin/catalogue/products/{product_id}", json={"name": "Local override"}).status_code == 409
-    assert client.post(f"/api/v1/admin/catalogue/products/{product_id}/publish").status_code == 409
-    assert client.delete(f"/api/v1/admin/catalogue/products/{product_id}").status_code == 409
-    assert client.patch(f"/api/v1/admin/catalogue/categories/{category_id}", json={"name": "Local override"}).status_code == 409
-    assert client.post(f"/api/v1/admin/catalogue/categories/{category_id}/publish").status_code == 409
-    assert client.delete(f"/api/v1/admin/catalogue/categories/{category_id}").status_code == 409
 
 
 def test_catalogue_deletes_reject_product_and_home_references(client: TestClient) -> None:
@@ -335,3 +522,173 @@ def test_catalogue_deletes_reject_product_and_home_references(client: TestClient
 @pytest.mark.parametrize("query", ["limit=0", "limit=501", "offset=-1", "q=" + ("x" * 121)])
 def test_invalid_catalogue_parameters_are_rejected(client: TestClient, query: str) -> None:
     assert client.get(f"/api/v1/catalogue/products?{query}").status_code == 422
+
+
+def test_end_to_end_wordpress_sync_category_pdf_inheritance_and_preservation(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = SimpleNamespace(
+        app_env="production",
+        wordpress_api_base_url="https://enertechups.com/wp-json",
+        wordpress_products_path="wc/v3/products",
+        wordpress_categories_path="wc/v3/products/categories",
+        wordpress_store_products_path="wc/store/v1/products",
+        wordpress_documents_path="wp/v2/media",
+        wordpress_wp_products_path="wp/v2/product",
+        wordpress_wp_categories_path="wp/v2/product_cat",
+        wordpress_consumer_key="ck_test",
+        wordpress_consumer_secret="cs_test",
+        wordpress_source_title_field="name",
+        wordpress_source_slug_field="slug",
+        wordpress_source_summary_field="short_description",
+        wordpress_source_description_field="description",
+        wordpress_source_model_field="sku",
+        wordpress_source_image_field="images.0.src",
+        wordpress_source_specifications_field="attributes",
+        wordpress_source_applications_field="",
+        wordpress_source_features_field="",
+        wordpress_source_documents_field="",
+    )
+    sync_datasets = [
+        {
+            "wc/v3/products/categories": [
+                {
+                    "id": 123,
+                    "name": "Batteryless Solar Hybrid Inverter",
+                    "slug": "batteryless-solar-hybrid-inverter",
+                    "description": '<p><a href="https://enertechups.com/wp-content/uploads/batteryless-family.pdf">Download Brochure</a></p>',
+                },
+            ],
+            "wc/v3/products": [
+                {
+                    "id": 3919,
+                    "name": "Batteryless Gridless Solar Hybrid Inverter",
+                    "slug": "batteryless-gridless-solar-hybrid-inverter",
+                    "sku": "ET-BL-10",
+                    "description": "<p>Runs direct on solar.</p>",
+                    "short_description": "Batteryless inverter",
+                    "permalink": "https://enertechups.com/product/batteryless-solar-hybrid-inverter/",
+                    "images": [{"src": "https://enertechups.com/wp-content/uploads/bl.png"}],
+                    "categories": [{"id": 123}],
+                    "attributes": [],
+                    "price": "150000",
+                    "stock_status": "instock",
+                },
+                {
+                    "id": 3920,
+                    "name": "Batteryless Pro Specific PDF Model",
+                    "slug": "batteryless-pro-specific",
+                    "sku": "ET-BL-20",
+                    "description": '<p>Spec sheet <a href="https://enertechups.com/wp-content/uploads/et-bl-20.pdf">Brochure</a></p>',
+                    "short_description": "",
+                    "permalink": "https://enertechups.com/product/batteryless-pro-specific/",
+                    "images": [],
+                    "categories": [{"id": 123}],
+                    "attributes": [],
+                    "price": "220000",
+                    "stock_status": "instock",
+                },
+            ],
+            "wc/store/v1/products": [],
+            "wp/v2/media": [],
+            "wp/v2/product": [],
+            "wp/v2/product_cat": [],
+        },
+        # Second sync drops PDFs from incoming WordPress payloads — existing associations MUST survive.
+        {
+            "wc/v3/products/categories": [
+                {"id": 123, "name": "Batteryless Solar Hybrid Inverter", "slug": "batteryless-solar-hybrid-inverter", "description": ""},
+            ],
+            "wc/v3/products": [
+                {
+                    "id": 3919,
+                    "name": "Batteryless Gridless Solar Hybrid Inverter",
+                    "slug": "batteryless-gridless-solar-hybrid-inverter",
+                    "sku": "ET-BL-10",
+                    "description": "<p>Updated description without PDF link.</p>",
+                    "short_description": "Batteryless inverter",
+                    "permalink": "https://enertechups.com/product/batteryless-solar-hybrid-inverter/",
+                    "images": [],
+                    "categories": [{"id": 123}],
+                    "attributes": [],
+                    "price": "150000",
+                    "stock_status": "instock",
+                },
+                {
+                    "id": 3920,
+                    "name": "Batteryless Pro Specific PDF Model",
+                    "slug": "batteryless-pro-specific",
+                    "sku": "ET-BL-20",
+                    "description": "<p>Updated text without PDF.</p>",
+                    "short_description": "",
+                    "permalink": "https://enertechups.com/product/batteryless-pro-specific/",
+                    "images": [],
+                    "categories": [{"id": 123}],
+                    "attributes": [],
+                    "price": "220000",
+                    "stock_status": "instock",
+                },
+            ],
+            "wc/store/v1/products": [],
+            "wp/v2/media": [],
+            "wp/v2/product": [],
+            "wp/v2/product_cat": [],
+        },
+    ]
+
+    monkeypatch.setattr(wordpress_api, "get_settings", lambda: settings)
+    current_dataset = sync_datasets[0]
+    monkeypatch.setattr(wordpress_api, "_fetch_all", lambda path, **_kwargs: current_dataset.get(path, []))
+
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="sync-admin", role="super_admin", is_active=True))
+        session.commit()
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "sync-admin", "admin@example.test", "Admin", {"email_verified": True}
+    )
+
+    # 1. Run initial sync
+    sync1 = client.post("/api/v1/admin/integrations/wordpress/sync")
+    assert sync1.status_code == 200, sync1.text
+    assert sync1.json()["category_catalogues_synced"] == 1
+    assert sync1.json()["documents_linked"] == 2
+
+    # 2. Verify CMS admin API returns resolved PDFs (inherited + product-specific)
+    cms_cats = client.get("/api/v1/admin/catalogue/categories").json()
+    assert cms_cats[0]["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/batteryless-family.pdf"
+
+    cms_prods = {p["slug"]: p for p in client.get("/api/v1/admin/catalogue/products").json()["items"]}
+    assert cms_prods["batteryless-gridless-solar-hybrid-inverter"]["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/batteryless-family.pdf"
+    assert cms_prods["batteryless-gridless-solar-hybrid-inverter"]["catalog_pdf_source"] == "category"
+    assert cms_prods["batteryless-pro-specific"]["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/et-bl-20.pdf"
+    assert cms_prods["batteryless-pro-specific"]["catalog_pdf_source"] == "product"
+
+    # 3. Verify Mobile/Public API returns inherited + specific PDFs
+    pub_list = {p["slug"]: p for p in client.get("/api/v1/catalogue/products").json()["items"]}
+    assert pub_list["batteryless-gridless-solar-hybrid-inverter"]["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/batteryless-family.pdf"
+    assert pub_list["batteryless-gridless-solar-hybrid-inverter"]["documents"][0]["url"] == "https://enertechups.com/wp-content/uploads/batteryless-family.pdf"
+    pub_detail = client.get("/api/v1/catalogue/products/batteryless-gridless-solar-hybrid-inverter").json()
+    assert pub_detail["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/batteryless-family.pdf"
+
+    # 4. Re-run sync where WP omits PDFs -> existing product & category PDF associations MUST remain intact!
+    current_dataset = sync_datasets[1]
+    sync2 = client.post("/api/v1/admin/integrations/wordpress/sync")
+    assert sync2.status_code == 200, sync2.text
+    assert sync2.json()["documents_linked"] == 2
+    pub_after = client.get("/api/v1/catalogue/products/batteryless-pro-specific").json()
+    assert pub_after["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/et-bl-20.pdf"
+    pub_inherited_after = client.get("/api/v1/catalogue/products/batteryless-gridless-solar-hybrid-inverter").json()
+    assert pub_inherited_after["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/batteryless-family.pdf"
+
+    # 5. CMS admin override on collection PDF persists across future WP syncs
+    cms_override = client.put("/api/v1/admin/catalogue/category-catalogues", json={
+        "category_key": "batteryless-solar-hybrid-inverter",
+        "title": "CMS Curated Batteryless Catalogue",
+        "catalog_pdf_url": "https://cdn.example.test/enertech-public/cms/batteryless-v2.pdf",
+    })
+    assert cms_override.status_code == 200, cms_override.text
+    current_dataset = sync_datasets[0]
+    assert client.post("/api/v1/admin/integrations/wordpress/sync").status_code == 200
+    pub_cms_override = client.get("/api/v1/catalogue/products/batteryless-gridless-solar-hybrid-inverter").json()
+    assert pub_cms_override["catalog_pdf_url"] == "https://cdn.example.test/enertech-public/cms/batteryless-v2.pdf"
+    assert pub_cms_override["documents"][0]["title"] == "CMS Curated Batteryless Catalogue"

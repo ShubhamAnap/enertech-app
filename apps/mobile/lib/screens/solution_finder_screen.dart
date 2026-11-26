@@ -581,4 +581,3 @@ class _SummaryLine extends StatelessWidget {
     ),
   );
 }
-

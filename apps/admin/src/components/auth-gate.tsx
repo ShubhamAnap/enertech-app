@@ -54,7 +54,7 @@ export default function AuthGate({ children }: { children: (user: User, role: st
             cache: "no-store",
             signal: controller.signal,
           }).finally(() => clearTimeout(timeout));
-          if (!active || currentEvent !== authEvent || controller.signal.aborted) return;
+          if (!active || currentEvent !== authEvent) return;
           if (!response.ok) {
             setRole("");
             setAccess(response.status === 401 || response.status === 403 ? "denied" : "unavailable");
@@ -64,15 +64,17 @@ export default function AuthGate({ children }: { children: (user: User, role: st
             return;
           }
           const session = await response.json().catch(() => null) as { role?: string } | null;
-          if (!active || currentEvent !== authEvent || controller.signal.aborted) return;
+          if (!active || currentEvent !== authEvent) return;
           if (!session?.role) throw new Error("The API did not return an administrator role.");
           setRole(session.role);
           setAccess("allowed");
         } catch {
-          if (!active || currentEvent !== authEvent || controller.signal.aborted) return;
+          if (!active || currentEvent !== authEvent) return;
           setRole("");
           setAccess("unavailable");
-          setAccessMessage("The CMS could not verify your role. Check the API connection and try again.");
+          setAccessMessage(controller.signal.aborted
+            ? "The API did not respond within 6 seconds. Check that the API is running and reachable, then retry."
+            : "The CMS could not verify your role. Check the API connection and try again.");
         }
       });
 
