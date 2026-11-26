@@ -30,7 +30,7 @@ async def _ensure_public_bucket(
     service_role_key: str,
     bucket: str,
 ) -> bool:
-    """Create the public Storage bucket via Service Role when Supabase reports it missing."""
+    """Create the public Storage bucket via Service Role or ensure an existing bucket is public."""
     headers = {
         "apikey": service_role_key,
         "Authorization": f"Bearer {service_role_key}",
@@ -41,8 +41,15 @@ async def _ensure_public_bucket(
         json={"id": bucket, "name": bucket, "public": True},
         headers=headers,
     )
-    if create_resp.status_code in (200, 201, 409):
+    if create_resp.status_code in (200, 201):
         return True
+    if create_resp.status_code == 409:
+        update_resp = await client.put(
+            f"{base_url}/storage/v1/bucket/{bucket}",
+            json={"id": bucket, "name": bucket, "public": True},
+            headers=headers,
+        )
+        return update_resp.status_code in (200, 201, 204)
     logger.warning(
         "Supabase Storage bucket auto-create failed bucket=%s status=%s body=%r",
         bucket,
@@ -109,6 +116,25 @@ async def upload_media_bytes_to_storage(
                     bucket=bucket,
                 ):
                     response = await client.put(storage_url, content=payload, headers=upload_headers)
+            elif response.status_code in (200, 201):
+                # Ensure existing bucket wasn't created privately with public=False
+                bucket_resp = await client.get(
+                    f"{base_url}/storage/v1/bucket/{bucket}",
+                    headers={
+                        "apikey": settings.supabase_service_role_key,
+                        "Authorization": f"Bearer {settings.supabase_service_role_key}",
+                    },
+                )
+                if bucket_resp.status_code == 200 and bucket_resp.json().get("public") is False:
+                    await client.put(
+                        f"{base_url}/storage/v1/bucket/{bucket}",
+                        json={"id": bucket, "name": bucket, "public": True},
+                        headers={
+                            "apikey": settings.supabase_service_role_key,
+                            "Authorization": f"Bearer {settings.supabase_service_role_key}",
+                            "Content-Type": "application/json",
+                        },
+                    )
     except httpx.TimeoutException as error:
         raise HTTPException(status_code=504, detail="Supabase Storage upload timed out") from error
     except httpx.HTTPError as error:

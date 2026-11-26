@@ -27,6 +27,9 @@ def test_media_upload_uses_async_storage_request(monkeypatch) -> None:
         async def __aexit__(self, *_args):
             return False
 
+        async def get(self, url, **kwargs):
+            return httpx.Response(200, json={"id": "enertech-public", "public": True})
+
         async def put(self, url, **kwargs):
             assert url.startswith("https://storage.example.test/storage/v1/object/enertech-public/cms/")
             assert kwargs["headers"]["Content-Type"] == "image/png"
@@ -74,6 +77,9 @@ def test_media_upload_accepts_pdf_brochures(monkeypatch) -> None:
 
         async def __aexit__(self, *_args):
             return False
+
+        async def get(self, url, **kwargs):
+            return httpx.Response(200, json={"id": "enertech-public", "public": True})
 
         async def put(self, url, **kwargs):
             assert url.endswith(".pdf")
@@ -148,6 +154,9 @@ def test_customer_service_photo_upload_accepts_image_and_rejects_pdf(monkeypatch
 
         async def __aexit__(self, *_args):
             return False
+
+        async def get(self, url, **kwargs):
+            return httpx.Response(200, json={"id": "enertech-public", "public": True})
 
         async def put(self, url, **kwargs):
             assert "/service-requests/cust-1/" in url
