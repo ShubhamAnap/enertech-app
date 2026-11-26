@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { api, uploadMedia, type AdminAccount, type AuditEvent, type CatalogueSummary, type Category, type CategoryCatalogue, type ContactInquiry, type ContentEnvelope, type CustomerProfile, type CustomerRequest, type KnowledgeArticle, type Product } from "@/lib/api";
 import { getFirebaseAuth } from "@/lib/firebase";
-import { AssignProductsModal, CollectionCataloguePdfModal, ProductCategoryOverrideModal, ProductPdfOverrideModal } from "./catalogue-modals";
+import { AssignProductsModal, CollectionCataloguePdfModal, CreateCollectionModal, ProductCategoryOverrideModal, ProductPdfOverrideModal } from "./catalogue-modals";
 
 type Section = "overview" | "products" | "categories" | "app_content" | "wordpress" | "service" | "quotes" | "contact_inquiries" | "knowledge" | "customers" | "admins" | "audit";
 type AppContentTab = "home" | "contacts" | "solution_finder" | "chat" | "brand";
@@ -37,7 +37,6 @@ const appContentTabs: { key: AppContentTab; title: string }[] = [
   { key: "chat", title: "Live chat" },
   { key: "brand", title: "Brand identity" },
 ];
-const emptyCategory = { catalog_pdf_url: null as string | null, slug: "", name: "", description: "", sort_order: 0, image_url: null as string | null, wordpress_source_id: null as string | null };
 const emptyProduct = { category_id: "", category_ids: [] as string[], slug: "", name: "", model_code: "", summary: "", description: "", applications: [] as string[], features: [] as string[], specifications: {} as Record<string, unknown>, image_url: null as string | null, gallery_images: [] as string[], price_minor: null as number | null, currency_code: "INR", currency_minor_unit: 2, stock_status: "unknown" as Product["stock_status"], stock_quantity: null as number | null, documents: [] as Product["documents"], source_reference: "", wordpress_source_id: null as string | null, wordpress_source_url: null as string | null };
 const emptyKnowledge = { slug: "", title: "", category: "General", answer: "", source_reference: "", sort_order: 0 };
 
@@ -125,17 +124,15 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<Set<string>>(new Set());
   const [bulkTargetCategoryId, setBulkTargetCategoryId] = useState("");
-  const [categoryForm, setCategoryForm] = useState<typeof emptyCategory | Category>(emptyCategory);
   const [productForm, setProductForm] = useState<typeof emptyProduct | Product>(emptyProduct);
   const [specificationsText, setSpecificationsText] = useState("{}");
   const [specificationsError, setSpecificationsError] = useState("");
-  const [editingCategory, setEditingCategory] = useState<string | null>(null);
   const [editingProduct, setEditingProduct] = useState<string | null>(null);
-  const [showCategoryForm, setShowCategoryForm] = useState(false);
+  const [collectionEditorTarget, setCollectionEditorTarget] = useState<Category | null>(null);
+  const [showCreateCollection, setShowCreateCollection] = useState(false);
   const [showProductForm, setShowProductForm] = useState(false);
   const [docUploadingIndex, setDocUploadingIndex] = useState<number | null>(null);
   const [assignTarget, setAssignTarget] = useState<Category | null>(null);
-  const [collectionUploading, setCollectionUploading] = useState(false);
   const [cataloguePdfTarget, setCataloguePdfTarget] = useState<Category | null>(null);
   const [productPdfTarget, setProductPdfTarget] = useState<Product | null>(null);
   const [productCategoryTarget, setProductCategoryTarget] = useState<Product | null>(null);
@@ -442,19 +439,6 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     }
   }
 
-  async function submitCategory(event: FormEvent) {
-    event.preventDefault(); setError(""); setNotice("");
-    try {
-      const { name, slug, description, sort_order, image_url, catalog_pdf_url } = categoryForm;
-      const payload = { name, slug, description, sort_order, image_url, catalog_pdf_url };
-      const saved = await api<Category>(user, editingCategory ? `/admin/catalogue/categories/${editingCategory}` : "/admin/catalogue/categories", { method: editingCategory ? "PATCH" : "POST", body: JSON.stringify(payload) });
-      setNotice("Collection draft saved.");
-      setCategoryForm(saved);
-      setEditingCategory(saved.id);
-      await loadCatalogue();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save category."); }
-  }
-
   async function toggleCategoryVisibility(category: Category) {
     setError(""); setNotice("");
     try {
@@ -636,7 +620,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save CMS access."); }
   }
 
-  function editCategory(category: Category) { setCategoryForm(category); setEditingCategory(category.id); setShowCategoryForm(true); }
+  function editCategory(category: Category) { setCollectionEditorTarget(category); setShowCreateCollection(true); }
   function openCategoryCatalogueModal(category: Category) { setCataloguePdfTarget(category); }
   function editProduct(product: Product) { setProductForm({ ...product, documents: product.own_documents }); setSpecificationsText(JSON.stringify(product.specifications ?? {}, null, 2)); setSpecificationsError(""); setEditingProduct(product.id); setShowProductForm(true); }
 
@@ -1052,9 +1036,8 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                           setEditingProduct(null);
                           setShowProductForm(true);
                         } else {
-                          setCategoryForm(emptyCategory);
-                          setEditingCategory(null);
-                          setShowCategoryForm(true);
+                          setCollectionEditorTarget(null);
+                          setShowCreateCollection(true);
                         }
                       }}
                     >
@@ -2239,63 +2222,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
         </div>
       </div>
 
-      {/* EDIT/CREATE CATEGORY MODAL */}
-      {showCategoryForm && (
-        <dialog open className="modal modal-open">
-          <div className="modal-box max-h-[90dvh] overflow-y-auto max-w-2xl">
-            <h2 className="text-xl font-bold">{editingCategory ? "Edit Collection" : "New Collection"}</h2>
-            <p className="mb-4 mt-1 text-sm text-base-content/60">
-              Publish the collection to show its assigned products in the app.
-            </p>
-            <form onSubmit={submitCategory} className="grid gap-3 sm:grid-cols-2">
-              {(["name", "slug", "description", "image_url"] as const).map((field) => (
-                field === "image_url" ? (
-                  <div key={field} className="sm:col-span-2"><ImageUrlField value={categoryForm.image_url ?? ""} onChange={(value) => setCategoryForm({ ...categoryForm, image_url: value || null })} /></div>
-                ) : (
-                  <label key={field} className={`form-control gap-1 ${field === "description" ? "sm:col-span-2" : ""}`}>
-                    <span className="label-text font-semibold">{humanize(field)}</span>
-                    {field === "description" ? (
-                      <textarea className="textarea textarea-bordered" value={categoryForm.description ?? ""} onChange={(event) => setCategoryForm({ ...categoryForm, description: event.target.value })} />
-                    ) : (
-                      <input
-                        className="input input-bordered"
-                        value={(categoryForm as typeof emptyCategory)[field] ?? ""}
-                        onChange={(event) => setCategoryForm({ ...categoryForm, [field]: event.target.value })}
-                        required={field === "name" || field === "slug"}
-                      />
-                    )}
-                  </label>
-                )
-              ))}
-              <label className="form-control gap-1 sm:col-span-2">
-                <span className="label-text font-semibold">Sort order</span>
-                <input className="input input-bordered" type="number" min="0" value={categoryForm.sort_order} onChange={(event) => setCategoryForm({ ...categoryForm, sort_order: Number(event.target.value) })} />
-              </label>
-              <label className="form-control gap-1 sm:col-span-2">Catalogue PDF URL
-                <input className="input input-bordered" type="url" value={categoryForm.catalog_pdf_url ?? ""} onChange={(e) => setCategoryForm({ ...categoryForm, catalog_pdf_url: e.target.value || null })} />
-              </label>
-              <label className="form-control gap-1 sm:col-span-2">Upload catalogue PDF
-                <input className="file-input" type="file" accept="application/pdf,.pdf" disabled={collectionUploading} onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  setCollectionUploading(true);
-                  try {
-                    const asset = await uploadMedia(user, file);
-                    setCategoryForm((form) => ({ ...form, catalog_pdf_url: asset.url }));
-                  } catch (cause) { setError(cause instanceof Error ? cause.message : "Upload failed."); }
-                  finally { setCollectionUploading(false); }
-                }} />
-              </label>
-              <div className="sm:col-span-2"><ContentComparison defaultOpen={false} draft={{ slug: categoryForm.slug, name: categoryForm.name, description: categoryForm.description, sort_order: categoryForm.sort_order, image_url: categoryForm.image_url }} published={"published_payload" in categoryForm ? categoryForm.published_payload ?? null : null} /></div>
-              <div className="modal-action sm:col-span-2">
-                <button type="button" className="btn btn-ghost" onClick={() => setShowCategoryForm(false)}>Close</button>
-                <button className="btn btn-primary" disabled={collectionUploading}>{collectionUploading ? "Uploading PDF…" : "Save draft"}</button>
-              </div>
-            </form>
-          </div>
-          <form method="dialog" className="modal-backdrop"><button onClick={() => setShowCategoryForm(false)}>close</button></form>
-        </dialog>
-      )}
+      {showCreateCollection && <CreateCollectionModal key={collectionEditorTarget?.id ?? "new"} target={collectionEditorTarget} user={user} onClose={() => { setShowCreateCollection(false); setCollectionEditorTarget(null); }} onNotice={setNotice} onError={setError} onRefresh={loadCatalogue} />}
 
       {assignTarget && <AssignProductsModal target={assignTarget} user={user} onClose={() => setAssignTarget(null)} onNotice={setNotice} onError={setError} onRefresh={loadCatalogue} />}
 

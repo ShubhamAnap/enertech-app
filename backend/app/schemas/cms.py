@@ -73,6 +73,17 @@ class CollectionProductsWrite(BaseModel):
         return list(dict.fromkeys(values))
 
 
+class CuratedCollectionWrite(BaseModel):
+    name: str = Field(min_length=2, max_length=180)
+    catalog_pdf_url: str = Field(min_length=8, max_length=1000, pattern=r"^https://")
+    product_ids: list[UUID] = Field(min_length=1)
+
+    @field_validator("product_ids")
+    @classmethod
+    def unique_product_ids(cls, values: list[UUID]) -> list[UUID]:
+        return list(dict.fromkeys(values))
+
+
 class CategoryBulkVisibilityWrite(BaseModel):
     category_ids: list[UUID] = Field(min_length=1, max_length=200)
     is_published: bool

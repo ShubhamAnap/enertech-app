@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import re
+import unicodedata
 from typing import Literal
 from uuid import UUID
 
@@ -28,6 +30,7 @@ from app.schemas.cms import (
     CategoryPatch,
     CategoryWrite,
     CollectionProductsWrite,
+    CuratedCollectionWrite,
     ProductAdmin,
     ProductAdminPage,
     ProductBulkCategoryWrite,
@@ -519,6 +522,110 @@ def create_category(
         raise HTTPException(status_code=409, detail="A category with this slug already exists") from error
     session.refresh(category)
     return _category_response(category, load_category_catalogue_lookup(session))
+
+
+@router.get("/categories/product-options")
+def all_collection_product_options(
+    session: Session = Depends(get_session),
+    _admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),
+) -> dict:
+    products = session.scalars(select(Product).order_by(Product.name, Product.id))
+    return {"products": [{"id": row.id, "name": row.name, "sku": row.model_code} for row in products]}
+
+
+@router.post("/categories/curate", status_code=status.HTTP_201_CREATED, response_model=CategoryAdmin)
+def create_curated_collection(
+    body: CuratedCollectionWrite,
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),
+) -> CategoryAdmin:
+    name = body.name.strip()
+    normalized = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+    base_slug = re.sub(r"[^a-z0-9]+", "-", normalized).strip("-")[:110].rstrip("-")
+    if not base_slug:
+        raise HTTPException(status_code=422, detail="Collection name must contain letters or numbers")
+    slug = base_slug
+    suffix = 2
+    while session.scalar(select(ProductCategory.id).where(ProductCategory.slug == slug)) is not None:
+        slug = f"{base_slug}-{suffix}"
+        suffix += 1
+    products = list(session.scalars(
+        select(Product).where(Product.id.in_(body.product_ids))
+        .options(selectinload(Product.category), selectinload(Product.categories))
+        .order_by(Product.id).with_for_update()
+    ))
+    if len(products) != len(body.product_ids):
+        raise HTTPException(status_code=422, detail="One or more selected products could not be found")
+    collection = ProductCategory(slug=slug, name=name, is_app_collection=True, is_published=True)
+    session.add(collection)
+    session.flush()
+    _sync_collection_catalogue_pdf(session, category=collection, pdf_url=body.catalog_pdf_url)
+    for product in products:
+        product.categories = [*list(product.categories), collection]
+        if not product.category.is_app_collection:
+            product.category_id = collection.id
+        if product.wordpress_source_id is not None:
+            product.category_override = True
+        if product.draft_data:
+            product.draft_data = {**product.draft_data, "category_id": str(product.category_id),
+                                  "category_ids": [str(cat.id) for cat in product.categories]}
+    _audit(session, admin, "collection.created_and_published", "product_category", str(collection.id),
+           ["name", "catalog_pdf_url", f"products={len(products)}"])
+    try:
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="A collection with this name already exists") from error
+    return _category_response(collection, load_category_catalogue_lookup(session), product_count=len(products))
+
+
+@router.put("/categories/{category_id}/curate", response_model=CategoryAdmin)
+def update_curated_collection(
+    category_id: UUID,
+    body: CuratedCollectionWrite,
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),
+) -> CategoryAdmin:
+    collection = session.get(ProductCategory, category_id, with_for_update=True)
+    if collection is None or not collection.is_app_collection:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    selected_ids = set(body.product_ids)
+    member = or_(Product.category_id == category_id, Product.categories.any(ProductCategory.id == category_id))
+    products = list(session.scalars(
+        select(Product).where(or_(member, Product.id.in_(selected_ids)))
+        .options(selectinload(Product.category), selectinload(Product.categories))
+        .order_by(Product.id).with_for_update()
+    ))
+    if selected_ids.difference(product.id for product in products):
+        raise HTTPException(status_code=422, detail="One or more selected products could not be found")
+    collection.name = body.name.strip()
+    collection.draft_data = None
+    collection.is_published = True
+    _sync_collection_catalogue_pdf(session, category=collection, pdf_url=body.catalog_pdf_url)
+    for product in products:
+        has_collection = product.category_id == category_id or collection in product.categories
+        if has_collection == (product.id in selected_ids):
+            continue
+        other_categories = list(dict.fromkeys(cat for cat in [product.category, *product.categories] if cat.id != category_id))
+        if product.id in selected_ids:
+            product.categories = [*other_categories, collection]
+            if not product.category.is_app_collection:
+                product.category_id = category_id
+        else:
+            if not other_categories:
+                other_categories.append(staging_tag(session))
+            product.categories = other_categories
+            if product.category_id == category_id:
+                product.category_id = next((cat.id for cat in other_categories if cat.is_app_collection), other_categories[0].id)
+        if product.wordpress_source_id is not None:
+            product.category_override = any(cat.is_app_collection for cat in product.categories)
+        if product.draft_data:
+            product.draft_data = {**product.draft_data, "category_id": str(product.category_id),
+                                  "category_ids": [str(cat.id) for cat in product.categories]}
+    _audit(session, admin, "collection.curated", "product_category", str(category_id),
+           ["name", "catalog_pdf_url", f"products={len(selected_ids)}"])
+    session.commit()
+    return _category_response(collection, load_category_catalogue_lookup(session), product_count=len(selected_ids))
 
 
 @router.patch("/categories/{category_id}", response_model=CategoryAdmin)

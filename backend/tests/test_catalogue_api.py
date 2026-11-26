@@ -336,6 +336,54 @@ def test_cms_product_create_edit_publish_keeps_multiple_collections(client: Test
     assert [item["id"] for item in public_catalogue.json()["items"]] == [product["id"]]
 
 
+def test_create_collection_with_pdf_and_full_product_checklist(client: TestClient) -> None:
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="curator", role="admin", is_active=True))
+        source = ProductCategory(slug="wp-source", name="Source", is_app_collection=False)
+        session.add(source)
+        session.flush()
+        products = [
+            Product(slug=f"curated-product-{index}", name=f"Product {index}", category_id=source.id,
+                    wordpress_source_id=str(index), is_published=True)
+            for index in range(2)
+        ]
+        session.add_all(products)
+        session.commit()
+        ids = [str(product.id) for product in products]
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "curator", "curator@example.test", "Curator", {"email_verified": True}
+    )
+    base = "/api/v1/admin/catalogue/categories"
+    options = client.get(f"{base}/product-options")
+    assert options.status_code == 200
+    assert {row["id"] for row in options.json()["products"]} == set(ids)
+    created = client.post(f"{base}/curate", json={
+        "name": "Solar Hybrid UPS", "catalog_pdf_url": "https://example.test/solar.pdf", "product_ids": ids,
+    })
+    assert created.status_code == 201, created.text
+    assert created.json()["slug"] == "solar-hybrid-ups"
+    assert created.json()["is_published"] is True
+    assert created.json()["product_count"] == 2
+    assert {row["slug"] for row in client.get("/api/v1/catalogue/categories").json()} == {"solar-hybrid-ups"}
+    rows = client.get("/api/v1/catalogue/products").json()["items"]
+    assert len(rows) == 2
+    assert all(row["catalog_pdf_url"] == "https://example.test/solar.pdf" for row in rows)
+    duplicate = client.post(f"{base}/curate", json={
+        "name": "Solar Hybrid UPS", "catalog_pdf_url": "https://example.test/second.pdf", "product_ids": ids[:1],
+    })
+    assert duplicate.status_code == 201
+    assert duplicate.json()["slug"] == "solar-hybrid-ups-2"
+    updated = client.put(f"{base}/{created.json()['id']}/curate", json={
+        "name": "Solar UPS", "catalog_pdf_url": "https://example.test/updated.pdf", "product_ids": ids[:1],
+    })
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["product_count"] == 1
+    assert updated.json()["name"] == "Solar UPS"
+    page = client.get("/api/v1/catalogue/products?category=solar-hybrid-ups").json()
+    assert page["total"] == 1
+    assert page["items"][0]["catalog_pdf_url"] == "https://example.test/updated.pdf"
+
+
 def test_woocommerce_sync_imports_all_product_categories(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = SimpleNamespace(
         wordpress_api_base_url="https://store.example.test/wp-json",

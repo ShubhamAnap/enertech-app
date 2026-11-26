@@ -449,6 +449,116 @@ type AssignmentRow = {
 
 type AssignmentOptions = { products: AssignmentRow[]; tags: Pick<Category, "id" | "name">[] };
 
+export function CreateCollectionModal({ target, user, onClose, onRefresh, onNotice }: ModalCallbacks & {
+  target?: Category | null;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(target?.name ?? "");
+  const [pdfUrl, setPdfUrl] = useState(target?.catalog_pdf_url ?? "");
+  const [pdfName, setPdfName] = useState("");
+  const [products, setProducts] = useState<Pick<AssignmentRow, "id" | "name" | "sku">[]>([]);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const path = target
+      ? `/admin/catalogue/categories/${target.id}/products`
+      : "/admin/catalogue/categories/product-options";
+    api<{ products: AssignmentRow[] }>(user, path)
+      .then((result) => {
+        if (!active) return;
+        setProducts(result.products);
+        setChecked(new Set(result.products.filter((product) => product.checked).map((product) => product.id)));
+      })
+      .catch((cause) => { if (active) setError(cause.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [user, target]);
+
+  const query = search.trim().toLowerCase();
+  const matching = products.filter((product) =>
+    product.name.toLowerCase().includes(query) || product.sku?.toLowerCase().includes(query));
+
+  function toggle(id: string, selected: boolean) {
+    setChecked((current) => {
+      const next = new Set(current);
+      if (selected) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (saving || !pdfUrl || checked.size === 0) return;
+    setSaving(true);
+    setError("");
+    try {
+      await api(user, target ? `/admin/catalogue/categories/${target.id}/curate` : "/admin/catalogue/categories/curate", {
+        method: target ? "PUT" : "POST",
+        body: JSON.stringify({ name: name.trim(), catalog_pdf_url: pdfUrl, product_ids: [...checked] }),
+      });
+      await onRefresh();
+      onNotice(`Published ${name.trim()} with ${checked.size} products.`);
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not create collection.");
+      setSaving(false);
+    }
+  }
+
+  return <dialog open className="modal modal-open" aria-labelledby="new-collection-title">
+    <div className="modal-box flex max-h-[90dvh] max-w-2xl flex-col">
+      <h2 className="text-xl font-bold" id="new-collection-title">{target ? "Edit collection" : "New collection"}</h2>
+      {error && <p className="alert alert-error mt-3" role="alert">{error}</p>}
+      <form onSubmit={(event) => void save(event)} className="mt-4 flex min-h-0 flex-col gap-4">
+        <label className="grid gap-1 font-semibold">Collection name
+          <input className="input w-full" required minLength={2} maxLength={180} value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label className="grid gap-1 font-semibold">Catalogue PDF
+          <input className="file-input w-full" type="file" accept="application/pdf,.pdf" required={!pdfUrl}
+            disabled={uploading || saving} onChange={async (event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              setUploading(true);
+              setError("");
+              try {
+                const asset = await uploadMedia(user, file);
+                setPdfUrl(asset.url);
+                setPdfName(file.name);
+              } catch (cause) { setError(cause instanceof Error ? cause.message : "PDF upload failed."); }
+              finally { setUploading(false); }
+            }} />
+          {pdfName && <span className="text-sm font-normal text-success">Uploaded {pdfName}</span>}
+          {uploading && <span className="text-sm font-normal" role="status">Uploading PDF…</span>}
+        </label>
+        <div className="min-h-0">
+          <label className="grid gap-1 font-semibold">Select products
+            <input className="input w-full" type="search" placeholder="Search all products by name or SKU" value={search} onChange={(event) => setSearch(event.target.value)} />
+          </label>
+          <p className="mt-2 text-sm" role="status">{checked.size} selected from {products.length} products</p>
+          <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-base-300 p-2">
+            {loading && <p>Loading all products…</p>}
+            {!loading && matching.length === 0 && <p>No matching products.</p>}
+            {matching.map((product) => <label key={product.id} className="flex min-h-11 cursor-pointer items-center gap-3 rounded px-2 hover:bg-base-200">
+              <input type="checkbox" className="checkbox checkbox-primary" checked={checked.has(product.id)} onChange={(event) => toggle(product.id, event.target.checked)} />
+              <span>{product.name}{product.sku && <small className="block text-base-content/60">{product.sku}</small>}</span>
+            </label>)}
+          </div>
+        </div>
+        <div className="modal-action mt-0">
+          <button type="button" className="btn" disabled={saving} onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={loading || uploading || saving || checked.size === 0 || !pdfUrl}>{saving ? "Saving…" : target ? "Save collection" : "Create and publish"}</button>
+        </div>
+      </form>
+    </div>
+  </dialog>;
+}
+
 export function AssignProductsModal({ target, user, onClose, onRefresh, onNotice }: ModalCallbacks & {
   target: Category;
   onClose: () => void;
