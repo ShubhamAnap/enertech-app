@@ -1,7 +1,7 @@
 services:
   api:
     build:
-      context: ../../backend
+      context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
@@ -20,6 +20,9 @@ services:
       WORDPRESS_CATEGORIES_PATH: ${WORDPRESS_CATEGORIES_PATH:-wc/v3/products/categories}
       WORDPRESS_STORE_PRODUCTS_PATH: ${WORDPRESS_STORE_PRODUCTS_PATH:-wc/store/v1/products}
       WORDPRESS_DOCUMENTS_PATH: ${WORDPRESS_DOCUMENTS_PATH:-wp/v2/media}
+      WORDPRESS_WP_PRODUCTS_PATH: ${WORDPRESS_WP_PRODUCTS_PATH:-wp/v2/product}
+      WORDPRESS_WP_CATEGORIES_PATH: ${WORDPRESS_WP_CATEGORIES_PATH:-wp/v2/product_cat}
+      WORDPRESS_PER_PAGE: ${WORDPRESS_PER_PAGE:-20}
       WORDPRESS_SOURCE_DOCUMENTS_FIELD: ${WORDPRESS_SOURCE_DOCUMENTS_FIELD:-}
       WORDPRESS_CONSUMER_KEY: ${WORDPRESS_CONSUMER_KEY:-}
       WORDPRESS_CONSUMER_SECRET: ${WORDPRESS_CONSUMER_SECRET:-}
@@ -37,7 +40,7 @@ services:
 
   admin:
     build:
-      context: ../../apps/admin
+      context: ./apps/admin
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?set the public API URL}
@@ -46,6 +49,9 @@ services:
         NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?set Firebase project ID}
         NEXT_PUBLIC_FIREBASE_APP_ID: ${NEXT_PUBLIC_FIREBASE_APP_ID:?set Firebase web app ID}
         NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID:?set Firebase sender ID}
+        ALLOW_HTTP_TEST_API: ${ALLOW_HTTP_TEST_API:-false}
+    environment:
+      INTERNAL_API_URL: http://api:8000
     restart: unless-stopped
     # Start the CMS even when API readiness fails so the admin site remains
     # reachable for diagnosis and configuration. API-backed CMS actions still
