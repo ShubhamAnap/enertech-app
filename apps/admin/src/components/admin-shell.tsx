@@ -426,10 +426,38 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   async function wordpressSync() {
     setWpStatus(""); setError(""); setNotice("");
     try {
-      setNotice("Syncing products and categories from WooCommerce live API...");
-      const result = await api<{ created: number; updated: number; skipped: number; withdrawn: number; documents_linked: number; message: string }>(user, "/admin/integrations/wordpress/sync", { method: "POST" });
-      setNotice(`${result.message || "WooCommerce sync complete!"} ${result.created || 0} new, ${result.updated || 0} updated, ${result.documents_linked || 0} PDFs linked.`);
-      setWpStatus(`${result.skipped || 0} records skipped; ${result.withdrawn || 0} products withdrawn.`);
+      setNotice("Syncing products, categories, and brochure PDFs from WooCommerce...");
+      const result = await api<{
+        source?: string;
+        source_mode?: string;
+        fallback_used?: boolean;
+        media_fetch_status?: string;
+        media_pdf_count?: number;
+        matched_by_rest_fields?: number;
+        matched_by_wp_media?: number;
+        matched_by_html?: number;
+        created?: number;
+        updated?: number;
+        skipped?: number;
+        withdrawn?: number;
+        categories?: number;
+        category_catalogues_synced?: number;
+        documents_linked?: number;
+        message?: string;
+      }>(user, "/admin/integrations/wordpress/sync", { method: "POST" });
+      const created = result.created || 0;
+      const updated = result.updated || 0;
+      const docsLinked = result.documents_linked || 0;
+      const catPdfs = result.category_catalogues_synced || 0;
+      const byRest = result.matched_by_rest_fields || 0;
+      const byMedia = result.matched_by_wp_media || 0;
+      const byHtml = result.matched_by_html || 0;
+      setNotice(
+        `${result.message || "WooCommerce sync complete."} ${created} new, ${updated} updated, ${docsLinked} PDFs linked (REST: ${byRest}, Media: ${byMedia}, Page HTML: ${byHtml}), ${catPdfs} collection PDFs.`,
+      );
+      setWpStatus(
+        `Source: ${result.source_mode || "wc/v3"} | Media index: ${result.media_pdf_count || 0} PDFs (${result.media_fetch_status || "ok"}) | ${result.skipped || 0} skipped, ${result.withdrawn || 0} withdrawn.`,
+      );
       await loadCatalogue();
       await loadWordPressStatus();
     } catch (cause) {
@@ -793,10 +821,10 @@ export default function AdminShell({ user, role }: { user: User; role: string })
 
                 {/* Toolbar Filter Bar */}
                 <article className="card panel table-panel overflow-hidden border border-base-200 rounded-xl">
-                  <div className="table-toolbar">
-                    <div className="flex min-w-0 w-full flex-wrap items-center gap-2 lg:w-auto lg:flex-1">
+                  <div className="table-toolbar xl:flex-nowrap">
+                    <div className="flex min-w-0 w-full flex-wrap xl:flex-nowrap items-center gap-2 xl:w-auto xl:flex-1">
                       {/* Search */}
-                      <label className="input input-bordered input-sm flex min-w-0 w-full items-center gap-2 rounded-lg sm:w-64 md:w-72">
+                      <label className="input input-bordered input-sm flex min-w-0 w-full items-center gap-2 rounded-lg sm:w-56 xl:w-64">
                         <span aria-hidden="true" className="text-base-content/40">⌕</span>
                         <input
                           className="min-w-0 flex-1"
@@ -812,7 +840,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         <>
                           {/* Collections dropdown */}
                           <select
-                            className="select select-bordered select-sm w-full min-w-0 rounded-lg text-xs sm:w-52"
+                            className="select select-bordered select-sm w-full min-w-0 rounded-lg text-xs sm:w-44 xl:w-48"
                             value={selectedProductCategory}
                             onChange={(e) => setSelectedProductCategory(e.target.value)}
                           >
@@ -824,7 +852,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
 
                           {/* Status filter dropdown */}
                           <select
-                            className="select select-bordered select-sm w-full min-w-0 rounded-lg text-xs sm:w-36"
+                            className="select select-bordered select-sm w-full min-w-0 rounded-lg text-xs sm:w-32 shrink-0"
                             value={productStatusFilter}
                             onChange={(e) => setProductStatusFilter(e.target.value as "all" | "published" | "draft")}
                           >
@@ -836,7 +864,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                       )}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-3 shrink-0">
+                    <div className="flex flex-wrap items-center gap-2.5 shrink-0">
                       {section === "products" && categoryHasMore && <button className="btn btn-ghost btn-xs" disabled={loading} onClick={() => void loadCatalogue(products.length, categories.length, true)}>Load more collections</button>}
                       {section === "products" && (
                         <div className="join border border-base-300 rounded-lg overflow-hidden bg-base-200/50">
@@ -1048,42 +1076,46 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                                     {product.stock_quantity != null && <span className="ml-2 text-xs text-base-content/60">Qty {product.stock_quantity}</span>}
                                   </div>
 
-                                  <div className="flex flex-wrap items-center gap-1.5 pt-3 mt-3 border-t border-base-200">
-                                    {pdfDoc && (
+                                  <div className="flex items-center justify-between gap-1.5 pt-2.5 mt-2.5 border-t border-base-200">
+                                    {pdfDoc ? (
                                       <a
                                         href={pdfDoc.url}
                                         target="_blank"
                                         rel="noreferrer"
-                                        className="btn btn-xs btn-outline gap-1 h-8 min-h-8 px-2 font-medium border-base-300 text-primary hover:bg-base-200"
+                                        className="btn btn-xs btn-outline gap-1 h-7 min-h-7 px-2 text-[11px] font-semibold border-primary/40 text-primary hover:bg-primary/10 shrink-0"
                                         title={pdfDoc.inherited ? `${pdfDoc.title} (inherited from collection)` : pdfDoc.title}
                                       >
                                         <AdminIcon name="document" /> {pdfDoc.inherited ? "Cat PDF" : "PDF"}
                                       </a>
+                                    ) : (
+                                      <span className="text-[11px] text-base-content/40 font-medium">No PDF</span>
                                     )}
-                                    <button
-                                      disabled={Boolean(product.wordpress_source_id)}
-                                      onClick={() => editProduct(product)}
-                                      className="btn btn-xs btn-outline gap-1 h-8 min-h-8 px-2 font-medium border-base-300 hover:bg-base-200"
-                                      title={product.wordpress_source_id ? "Managed by WooCommerce; edit it there, then sync again" : "Edit"}
-                                    >
-                                      <AdminIcon name="edit" /> Edit
-                                    </button>
-                                    <button
-                                      disabled={Boolean(product.wordpress_source_id)}
-                                      onClick={() => product.is_published ? void unpublish(`/admin/catalogue/products/${product.id}/unpublish`) : void publish(`/admin/catalogue/products/${product.id}/publish`)}
-                                      className="btn btn-xs btn-outline gap-1 h-8 min-h-8 px-2 font-medium border-base-300 hover:bg-base-200"
-                                      title={product.wordpress_source_id ? "Managed by WooCommerce" : product.is_published ? "Unpublish" : "Publish"}
-                                    >
-                                      {product.is_published ? "Unpublish" : "Publish"}
-                                    </button>
-                                    <button
-                                      disabled={Boolean(product.wordpress_source_id)}
-                                      onClick={() => deleteProductItem(product.id, product.name)}
-                                      className="btn btn-xs btn-outline btn-error gap-1 h-8 min-h-8 px-2 font-medium hover:text-white"
-                                      title={product.wordpress_source_id ? "Managed by WooCommerce; remove it there, then sync again" : "Delete"}
-                                    >
-                                      <AdminIcon name="delete" /> Delete
-                                    </button>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        disabled={Boolean(product.wordpress_source_id)}
+                                        onClick={() => editProduct(product)}
+                                        className="btn btn-xs btn-outline gap-1 h-7 min-h-7 px-2 text-[11px] font-medium border-base-300 hover:bg-base-200"
+                                        title={product.wordpress_source_id ? "Managed by WooCommerce; edit it there, then sync again" : "Edit"}
+                                      >
+                                        <AdminIcon name="edit" /> Edit
+                                      </button>
+                                      <button
+                                        disabled={Boolean(product.wordpress_source_id)}
+                                        onClick={() => product.is_published ? void unpublish(`/admin/catalogue/products/${product.id}/unpublish`) : void publish(`/admin/catalogue/products/${product.id}/publish`)}
+                                        className="btn btn-xs btn-outline h-7 min-h-7 px-2 text-[11px] font-medium border-base-300 hover:bg-base-200"
+                                        title={product.wordpress_source_id ? "Managed by WooCommerce" : product.is_published ? "Unpublish" : "Publish"}
+                                      >
+                                        {product.is_published ? "Hide" : "Publish"}
+                                      </button>
+                                      <button
+                                        disabled={Boolean(product.wordpress_source_id)}
+                                        onClick={() => deleteProductItem(product.id, product.name)}
+                                        className="btn btn-xs btn-outline btn-error h-7 min-h-7 px-2 text-[11px] font-medium hover:text-white"
+                                        title={product.wordpress_source_id ? "Managed by WooCommerce; remove it there, then sync again" : "Delete"}
+                                      >
+                                        <AdminIcon name="delete" />
+                                      </button>
+                                    </div>
                                   </div>
                                 </div>
                               </div>

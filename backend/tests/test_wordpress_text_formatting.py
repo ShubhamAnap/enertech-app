@@ -5,7 +5,10 @@ import pytest
 import app.api.wordpress as wordpress_api
 from app.api.wordpress import (
     _documents,
+    _extract_html_pdf_documents,
     _fetch_all,
+    _fetch_pdf_media_resilient,
+    _https_url,
     _normalize_wp_base_url,
     _plain,
     _safe_json,
@@ -141,3 +144,98 @@ def test_fetch_all_falls_back_to_query_auth_on_401_and_smaller_page_on_500(monke
     assert calls[0]["auth"] == ("ck_test_key", "cs_test_secret")
     assert calls[1]["params"]["consumer_key"] == "ck_test_key"
     assert calls[2]["params"]["per_page"] == 10
+
+
+def test_documents_upgrade_http_and_extract_escaped_elementor_and_downloads() -> None:
+    product = {
+        "id": 3919,
+        "downloads": [
+            {"name": "Batteryless Download", "file": "http://enertechups.com/wp-content/uploads/2025/05/bl-download"},
+        ],
+        "meta_data": [
+            {
+                "key": "_elementor_data",
+                "value": '[{"settings":{"url":"http:\\/\\/enertechups.com\\/wp-content\\/uploads\\/2025\\/05\\/elementor-brochure.pdf"}}]',
+            },
+        ],
+        "description": '<p><a href="http://enertechups.com/wp-content/uploads/desc-spec.pdf">Download</a></p>',
+    }
+    media = [
+        {
+            "id": 500,
+            "post": 3919,
+            "mime_type": "application/pdf",
+            "title": {"rendered": "Attached Sheet"},
+            "source_url": "http://enertechups.com/wp-content/uploads/attached-sheet.pdf",
+        }
+    ]
+    docs = _documents(product, media, site_origin="https://enertechups.com")
+    urls = [doc["url"] for doc in docs]
+    assert "https://enertechups.com/wp-content/uploads/2025/05/bl-download" in urls
+    assert "https://enertechups.com/wp-content/uploads/2025/05/elementor-brochure.pdf" in urls
+    assert "https://enertechups.com/wp-content/uploads/desc-spec.pdf" in urls
+    assert "https://enertechups.com/wp-content/uploads/attached-sheet.pdf" in urls
+    assert _https_url("wp-content/uploads/a.pdf", site_origin="https://enertechups.com") == (
+        "https://enertechups.com/wp-content/uploads/a.pdf"
+    )
+
+
+def test_fetch_pdf_media_resilient_keeps_partial_pages_and_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = SimpleNamespace(
+        app_env="production",
+        wordpress_api_base_url="https://enertechups.com/wp-json",
+        wordpress_consumer_key="ck_test",
+        wordpress_consumer_secret="cs_test",
+        wordpress_username="",
+        wordpress_application_password="",
+    )
+    monkeypatch.setattr(wordpress_api, "get_settings", lambda: settings)
+
+    def fake_get(self, url, *, params=None, headers=None, auth=None):
+        p = dict(params or {})
+        page = int(p.get("page", 1))
+        per_page = int(p.get("per_page", 100))
+        if per_page == 100:
+            return httpx.Response(400, request=httpx.Request("GET", url), text='{"code":"rest_invalid_param"}')
+        if page == 1 and "consumer_key" not in p:
+            return httpx.Response(401, request=httpx.Request("GET", url), text='{"code":"rest_forbidden"}')
+        if page == 1:
+            batch = [{"id": idx, "source_url": f"http://enertechups.com/wp-content/uploads/doc-{idx}.pdf"} for idx in range(25)]
+            return httpx.Response(200, request=httpx.Request("GET", url), json=batch, headers={"X-WP-TotalPages": "3"})
+        return httpx.Response(500, request=httpx.Request("GET", url), text="Server busy")
+
+    monkeypatch.setattr(httpx.Client, "get", fake_get)
+    rows, status_note = _fetch_pdf_media_resilient("wp/v2/media")
+    assert len(rows) == 25
+    assert status_note == "partial_http_500:25"
+
+
+def test_extract_html_pdf_documents_strips_header_nav_footer() -> None:
+    html = """
+    <html>
+      <body>
+        <header><nav><a href="/wp-content/uploads/global-header-catalog.pdf">Catalog</a></nav></header>
+        <main>
+          <h1>Batteryless Solar Hybrid Inverter</h1>
+          <a href="http://enertechups.com/wp-content/uploads/batteryless-brochure.pdf">Download Brochure</a>
+        </main>
+        <footer><a href="https://enertechups.com/wp-content/uploads/footer-all-products.pdf">All PDF</a></footer>
+      </body>
+    </html>
+    """
+    docs = _extract_html_pdf_documents(html, site_origin="https://enertechups.com")
+    assert docs == [
+        {
+            "title": "Product brochure",
+            "url": "https://enertechups.com/wp-content/uploads/batteryless-brochure.pdf",
+        }
+    ]
+
+    no_brochure_html = """
+    <html><body>
+      <header><a href="https://enertechups.com/wp-content/uploads/global-menu.pdf">Catalog</a></header>
+      <main><h1>10KVA Voltage Stabilizer</h1><p>No brochure</p></main>
+      <footer><a href="https://enertechups.com/wp-content/uploads/footer.pdf">Footer</a></footer>
+    </body></html>
+    """
+    assert _extract_html_pdf_documents(no_brochure_html, site_origin="https://enertechups.com") == []

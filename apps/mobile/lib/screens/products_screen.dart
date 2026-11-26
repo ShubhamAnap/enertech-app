@@ -468,13 +468,57 @@ class _ProductCard extends StatelessWidget {
                     ),
                   ],
                   const SizedBox(height: 5),
-                  const Text(
-                    'View product details',
-                    style: TextStyle(
-                      color: AppColors.blue,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      const Text(
+                        'View product details',
+                        style: TextStyle(
+                          color: AppColors.blue,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      if (product.documents.isNotEmpty ||
+                          (product.catalogPdfUrl?.startsWith('https://') ??
+                              false))
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEEF5FC),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
+                              color: AppColors.blue.withValues(alpha: .28),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.picture_as_pdf_rounded,
+                                size: 11,
+                                color: AppColors.blue,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                product.documents.length > 1
+                                    ? '${product.documents.length} PDFs'
+                                    : 'Brochure PDF',
+                                style: const TextStyle(
+                                  color: AppColors.blue,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
                   ),
                 ],
               ),

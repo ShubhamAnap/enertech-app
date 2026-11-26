@@ -692,3 +692,106 @@ def test_end_to_end_wordpress_sync_category_pdf_inheritance_and_preservation(
     pub_cms_override = client.get("/api/v1/catalogue/products/batteryless-gridless-solar-hybrid-inverter").json()
     assert pub_cms_override["catalog_pdf_url"] == "https://cdn.example.test/enertech-public/cms/batteryless-v2.pdf"
     assert pub_cms_override["documents"][0]["title"] == "CMS Curated Batteryless Catalogue"
+
+
+def test_wordpress_sync_html_fallback_and_telemetry(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = SimpleNamespace(
+        app_env="production",
+        wordpress_api_base_url="https://enertechups.com/wp-json",
+        wordpress_products_path="wc/v3/products",
+        wordpress_categories_path="wc/v3/products/categories",
+        wordpress_store_products_path="",
+        wordpress_documents_path="wp/v2/media",
+        wordpress_wp_products_path="",
+        wordpress_wp_categories_path="",
+        wordpress_consumer_key="ck_test",
+        wordpress_consumer_secret="cs_test",
+        wordpress_source_title_field="name",
+        wordpress_source_slug_field="slug",
+        wordpress_source_summary_field="short_description",
+        wordpress_source_description_field="description",
+        wordpress_source_model_field="sku",
+        wordpress_source_image_field="images.0.src",
+        wordpress_source_specifications_field="attributes",
+        wordpress_source_applications_field="",
+        wordpress_source_features_field="",
+        wordpress_source_documents_field="",
+        wordpress_html_fallback_enabled=True,
+    )
+    dataset = {
+        "wc/v3/products/categories": [
+            {"id": 201, "name": "Industrial UPS", "slug": "industrial-ups", "description": ""},
+            {"id": 202, "name": "Voltage Stabilizers", "slug": "voltage-stabilizers", "description": ""},
+        ],
+        "wc/v3/products": [
+            {
+                "id": 5001,
+                "name": "100 KVA Industrial UPS",
+                "slug": "100-kva-industrial-ups",
+                "sku": "ET-UPS-100",
+                "description": "<p>High reliability industrial UPS.</p>",
+                "short_description": "",
+                "permalink": "https://enertechups.com/product/100-kva-industrial-ups/",
+                "images": [],
+                "categories": [{"id": 201}],
+                "attributes": [],
+                "price": "776200",
+                "stock_status": "instock",
+            },
+            {
+                "id": 5002,
+                "name": "10KVA Voltage Stabilizer",
+                "slug": "10kva-voltage-stabilizer",
+                "sku": "ET-VS-10",
+                "description": "<p>Servo stabilizer.</p>",
+                "short_description": "",
+                "permalink": "https://enertechups.com/product/10kva-voltage-stabilizer/",
+                "images": [],
+                "categories": [{"id": 202}],
+                "attributes": [],
+                "price": "45500",
+                "stock_status": "instock",
+            },
+        ],
+        "wp/v2/media": [],
+    }
+    html_pages = {
+        "https://enertechups.com/product-category/industrial-ups/": (
+            "<main><a href='http://enertechups.com/wp-content/uploads/industrial-ups-family.pdf'>Family Catalogue</a></main>"
+        ),
+        "https://enertechups.com/product/100-kva-industrial-ups/": (
+            "<header><a href='/wp-content/uploads/header.pdf'>Header</a></header>"
+            "<main><a href='/wp-content/uploads/100kva-industrial-ups.pdf'>Download Brochure</a></main>"
+        ),
+        "https://enertechups.com/product/10kva-voltage-stabilizer/": (
+            "<header><a href='/wp-content/uploads/header.pdf'>Header</a></header>"
+            "<main><p>Details only, no brochure uploaded.</p></main>"
+        ),
+    }
+
+    monkeypatch.setattr(wordpress_api, "get_settings", lambda: settings)
+    monkeypatch.setattr(wordpress_api, "_fetch_all", lambda path, **_kwargs: dataset.get(path, []))
+    monkeypatch.setattr(wordpress_api, "_fetch_html_page", lambda url, **_kwargs: html_pages.get(url, ""))
+
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="html-admin", role="super_admin", is_active=True))
+        session.commit()
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "html-admin", "admin@example.test", "Admin", {"email_verified": True}
+    )
+
+    resp = client.post("/api/v1/admin/integrations/wordpress/sync")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["matched_by_html"] == 1
+    assert body["category_catalogues_synced"] == 1
+    assert body["documents_linked"] == 1
+
+    ups_detail = client.get("/api/v1/catalogue/products/100-kva-industrial-ups").json()
+    assert ups_detail["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/100kva-industrial-ups.pdf"
+
+    stabilizer_detail = client.get("/api/v1/catalogue/products/10kva-voltage-stabilizer").json()
+    assert stabilizer_detail["catalog_pdf_url"] is None
+    assert stabilizer_detail["documents"] == []

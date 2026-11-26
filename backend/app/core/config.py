@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     wordpress_wp_products_path: str = "wp/v2/product"
     wordpress_wp_categories_path: str = "wp/v2/product_cat"
     wordpress_per_page: int = 20
+    wordpress_html_fallback_enabled: bool = True
     wordpress_consumer_key: str = ""
     wordpress_consumer_secret: str = ""
     wordpress_username: str = ""

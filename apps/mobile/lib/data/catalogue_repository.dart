@@ -159,6 +159,7 @@ class CatalogueRepository {
         '/catalogue/products/${Uri.encodeComponent(slug)}',
       );
       if (json is Map<String, dynamic>) {
+        unawaited(_syncCachedProductSummary(json));
         return ProductDetails.fromJson(json);
       }
     } catch (e) {
@@ -166,6 +167,54 @@ class CatalogueRepository {
     }
 
     throw const CatalogueException('Product could not be loaded from server.');
+  }
+
+  Future<void> _syncCachedProductSummary(
+    Map<String, dynamic> detailJson,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_productsCacheKey);
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return;
+      final rawItems = decoded['items'];
+      if (rawItems is! List) return;
+
+      final targetId = detailJson['id'];
+      final targetSlug = detailJson['slug'];
+      var changed = false;
+      final updatedItems = rawItems.map((entry) {
+        if (entry is Map<String, dynamic> &&
+            ((targetId != null && entry['id'] == targetId) ||
+                (targetSlug != null && entry['slug'] == targetSlug))) {
+          changed = true;
+          return <String, dynamic>{
+            ...entry,
+            if (detailJson.containsKey('documents'))
+              'documents': detailJson['documents'],
+            if (detailJson.containsKey('catalog_pdf_url'))
+              'catalog_pdf_url': detailJson['catalog_pdf_url'],
+            if (detailJson.containsKey('price_minor'))
+              'price_minor': detailJson['price_minor'],
+            if (detailJson.containsKey('stock_status'))
+              'stock_status': detailJson['stock_status'],
+            if (detailJson.containsKey('stock_quantity'))
+              'stock_quantity': detailJson['stock_quantity'],
+            if (detailJson.containsKey('summary'))
+              'summary': detailJson['summary'],
+          };
+        }
+        return entry;
+      }).toList(growable: false);
+
+      if (changed) {
+        await prefs.setString(
+          _productsCacheKey,
+          jsonEncode(<String, dynamic>{...decoded, 'items': updatedItems}),
+        );
+      }
+    } catch (_) {}
   }
 
   Future<ProductPageData> getProductsByIds(List<String> ids) async {

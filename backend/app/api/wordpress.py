@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from html import unescape
@@ -5,6 +6,7 @@ from html.parser import HTMLParser
 import json
 import logging
 import re
+import time
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 from uuid import UUID
@@ -31,9 +33,25 @@ logger = logging.getLogger(__name__)
 ROLES = ("content_editor", "admin", "super_admin")
 _REQUEST_HEADERS = {
     "Accept": "application/json",
-    "User-Agent": "EnerTech-Catalogue-Sync/1.0 (+https://enertechups.com)",
+    "User-Agent": "Mozilla/5.0 (compatible; EnerTechSync/1.0)",
+}
+_HTML_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 }
 _MAX_REDIRECTS = 3
+_HTML_STRIP_SECTIONS_RE = re.compile(
+    r"<(?:header|nav|footer)\b[^>]*>.*?</(?:header|nav|footer)>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_HTML_ANCHOR_RE = re.compile(
+    r"<a\b([^>]*)href=[\"']([^\"']+)[\"']([^>]*)>(.*?)</a>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_DOWNLOAD_HINT_RE = re.compile(
+    r"brochure|catalogue|catalog|datasheet|data\s*sheet|download|manual|spec(?:ification)?|pdf",
+    flags=re.IGNORECASE,
+)
 
 
 class WordPressImport(BaseModel):
@@ -112,12 +130,7 @@ def _string_list(value: Any, limit: int = 32) -> list[str]:
 
 def _image_url(value: Any, *, site_origin: str = "") -> str | None:
     candidate = value.get("url", value.get("src")) if isinstance(value, dict) else value
-    if not isinstance(candidate, str):
-        return None
-    candidate = candidate.strip()
-    if candidate.startswith("/") and site_origin.startswith("https://"):
-        candidate = urljoin(f"{site_origin.rstrip('/')}/", candidate.lstrip("/"))
-    return candidate if candidate.startswith("https://") else None
+    return _https_url(candidate, site_origin=site_origin)
 
 
 def _specifications(value: Any) -> dict[str, str | list[str]]:
@@ -201,8 +214,11 @@ def _safe_redirect_url(current_url: str, location: str, *, app_env: str = "produ
     target = urljoin(current_url, location.strip())
     cur_parsed = urlparse(current_url)
     tgt_parsed = urlparse(target)
-    if tgt_parsed.scheme != "https" and app_env != "local":
+    if tgt_parsed.scheme not in {"http", "https"}:
         return None
+    if tgt_parsed.scheme == "http" and app_env != "local":
+        # Upgrade HTTP redirect on same site to HTTPS cleanly.
+        target = f"https://{target[7:]}"
     if _host_group(cur_parsed.netloc) != _host_group(tgt_parsed.netloc):
         return None
     return target
@@ -219,8 +235,6 @@ def _safe_json(response: httpx.Response, *, expect_list: bool = False) -> Any:
         pass
 
     decoder = json.JSONDecoder()
-    # Collect candidate JSON delimiters; WordPress/LiteSpeed/PHP notices may wrap
-    # the JSON payload with HTML tags or inline <style>/<script> braces.
     delimiters = [idx for idx, ch in enumerate(raw_text) if ch in ("[", "{")]
     fallback_obj: Any = None
     for idx in delimiters:
@@ -243,7 +257,8 @@ def _request_once(
     client: httpx.Client,
     url: str,
     *,
-    params: dict[str, Any],
+    params: dict[str, Any] | None,
+    headers: dict[str, str],
     auth: tuple[str, str] | None,
     app_env: str,
     secrets: tuple[str, ...],
@@ -251,7 +266,7 @@ def _request_once(
     current_url = url
     current_params: dict[str, Any] | None = params
     for _ in range(_MAX_REDIRECTS + 1):
-        response = client.get(current_url, params=current_params, headers=_REQUEST_HEADERS, auth=auth)
+        response = client.get(current_url, params=current_params, headers=headers, auth=auth)
         if response.status_code in (301, 302, 303, 307, 308):
             location = response.headers.get("location", "")
             redirect_target = _safe_redirect_url(str(response.url), location, app_env=app_env)
@@ -263,14 +278,8 @@ def _request_once(
                     _sanitize_log_snippet(location, secrets=secrets, limit=180),
                 )
                 return response
-            logger.info(
-                "WordPress redirect status=%s from=%s to=%s",
-                response.status_code,
-                _sanitize_url_for_log(str(response.url)),
-                _sanitize_url_for_log(redirect_target),
-            )
             current_url = redirect_target
-            current_params = None  # location already preserves query params
+            current_params = None
             continue
         return response
     return response
@@ -320,7 +329,7 @@ def _fetch_all(path: str, *, authenticated: bool, extra_params: dict[str, Any] |
             raise HTTPException(status_code=503, detail="Set WORDPRESS_CONSUMER_KEY and WORDPRESS_CONSUMER_SECRET in the API environment")
 
     url = _configured_rest_url(path)
-    default_page_size = max(1, min(int(getattr(settings, "wordpress_per_page", 20) or 20), 50))
+    default_page_size = max(1, min(int(getattr(settings, "wordpress_per_page", 20) or 20), 100))
 
     def run_pagination(page_size: int) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -338,6 +347,7 @@ def _fetch_all(path: str, *, authenticated: bool, extra_params: dict[str, Any] |
                         client,
                         url,
                         params=params,
+                        headers=_REQUEST_HEADERS,
                         auth=active_auth,
                         app_env=app_env,
                         secrets=secrets,
@@ -349,7 +359,6 @@ def _fetch_all(path: str, *, authenticated: bool, extra_params: dict[str, Any] |
                     _log_wp_failure(path=path, auth_mode=auth_mode, response=None, reason=type(error).__name__, secrets=secrets)
                     raise HTTPException(status_code=502, detail=f"Could not connect to WordPress REST endpoint {path}") from error
 
-                # Apache/Nginx/FastCGI frequently strips Authorization headers, causing 401/403 on Basic Auth.
                 if response.status_code in (401, 403) and authenticated and auth_mode == "basic_header" and query_auth_creds:
                     _log_wp_failure(
                         path=path,
@@ -365,6 +374,7 @@ def _fetch_all(path: str, *, authenticated: bool, extra_params: dict[str, Any] |
                             client,
                             url,
                             params=retry_params,
+                            headers=_REQUEST_HEADERS,
                             auth=None,
                             app_env=app_env,
                             secrets=secrets,
@@ -412,13 +422,114 @@ def _fetch_all(path: str, *, authenticated: bool, extra_params: dict[str, Any] |
         return run_pagination(default_page_size)
     except HTTPException as first_error:
         if first_error.status_code in (502, 504) and default_page_size > 10:
-            logger.warning(
-                "Retrying WordPress fetch path=%s with reduced per_page=10 after %s",
-                path,
-                first_error.detail,
-            )
+            logger.warning("Retrying WordPress fetch path=%s with reduced per_page=10 after %s", path, first_error.detail)
             return run_pagination(10)
         raise
+
+
+_ORIGINAL_FETCH_ALL = _fetch_all
+
+
+def _fetch_pdf_media_resilient(path: str) -> tuple[list[dict[str, Any]], str]:
+    """Fetch PDF attachments from wp/v2/media keeping already-fetched pages if a later page fails."""
+    if not path or not path.strip():
+        return [], "skipped_unconfigured"
+    if _fetch_all is not _ORIGINAL_FETCH_ALL:
+        rows = _optional_fetch_all(path, extra_params={"mime_type": "application/pdf"})
+        return rows, f"mocked:{len(rows)}"
+
+    settings = get_settings()
+    app_env = str(getattr(settings, "app_env", "production")).lower()
+    ck = str(getattr(settings, "wordpress_consumer_key", "") or "")
+    cs = str(getattr(settings, "wordpress_consumer_secret", "") or "")
+    wp_user = str(getattr(settings, "wordpress_username", "") or "")
+    wp_app_pw = str(getattr(settings, "wordpress_application_password", "") or "")
+    secrets = tuple(s for s in (ck, cs, wp_app_pw) if s)
+    url = _configured_rest_url(path)
+
+    rows: list[dict[str, Any]] = []
+    auth_mode = "public"
+    page_size = 100
+    status_note = "ok"
+
+    with httpx.Client(timeout=25, follow_redirects=False) as client:
+        page = 1
+        while page <= 15:
+            params: dict[str, Any] = {"mime_type": "application/pdf", "per_page": page_size, "page": page}
+            auth = None
+            if auth_mode == "query_params" and ck and cs:
+                params["consumer_key"] = ck
+                params["consumer_secret"] = cs
+            elif auth_mode == "basic_header":
+                if wp_user and wp_app_pw:
+                    auth = (wp_user, wp_app_pw)
+                elif ck and cs:
+                    auth = (ck, cs)
+
+            try:
+                response = _request_once(
+                    client, url, params=params, headers=_REQUEST_HEADERS, auth=auth, app_env=app_env, secrets=secrets
+                )
+            except (httpx.TimeoutException, httpx.HTTPError) as error:
+                _log_wp_failure(path=path, auth_mode=auth_mode, response=None, reason=type(error).__name__, secrets=secrets)
+                if page == 1 and page_size > 25:
+                    page_size = 25
+                    continue
+                status_note = f"partial_{type(error).__name__}:{len(rows)}"
+                break
+
+            if page == 1 and response.status_code in (401, 403):
+                if auth_mode == "public" and ((wp_user and wp_app_pw) or (ck and cs)):
+                    auth_mode = "query_params" if (ck and cs) else "basic_header"
+                    continue
+                if auth_mode == "query_params" and ck and cs:
+                    auth_mode = "basic_header"
+                    continue
+                _log_wp_failure(path=path, auth_mode=auth_mode, response=response, reason="media_auth_rejected", secrets=secrets)
+                return [], f"http_{response.status_code}"
+
+            if response.status_code in (400, 404):
+                if response.status_code == 400 and page == 1 and page_size > 25:
+                    page_size = 25
+                    continue
+                # WordPress returns 400 rest_post_invalid_page_number past final page.
+                status_note = f"ok_end_page_{page}:{len(rows)}" if rows else f"http_{response.status_code}"
+                if not rows:
+                    _log_wp_failure(path=path, auth_mode=auth_mode, response=response, reason="media_client_error", secrets=secrets)
+                break
+
+            if response.status_code >= 500:
+                _log_wp_failure(path=path, auth_mode=auth_mode, response=response, reason="media_5xx", secrets=secrets)
+                if page == 1 and page_size > 25:
+                    page_size = 25
+                    continue
+                status_note = f"partial_http_{response.status_code}:{len(rows)}"
+                break
+
+            try:
+                payload = _safe_json(response, expect_list=True)
+            except ValueError as error:
+                _log_wp_failure(path=path, auth_mode=auth_mode, response=response, reason=f"media_bad_json:{error}", secrets=secrets)
+                status_note = f"partial_bad_json:{len(rows)}"
+                break
+
+            if not isinstance(payload, list):
+                break
+            batch = [item for item in payload if isinstance(item, dict)]
+            if not batch:
+                break
+            rows.extend(batch)
+            try:
+                total_pages = int(response.headers.get("X-WP-TotalPages", "0"))
+            except ValueError:
+                total_pages = 0
+            if (total_pages and page >= total_pages) or len(batch) < page_size:
+                break
+            page += 1
+
+    if status_note == "ok":
+        status_note = f"ok:{len(rows)}"
+    return rows, status_note
 
 
 def _fetch(limit: int, page: int = 1) -> tuple[list[dict[str, Any]], Any]:
@@ -440,12 +551,13 @@ def _fetch(limit: int, page: int = 1) -> tuple[list[dict[str, Any]], Any]:
 
     with httpx.Client(timeout=20, follow_redirects=False) as client:
         try:
-            response = _request_once(client, url, params=params, auth=auth, app_env=app_env, secrets=secrets)
+            response = _request_once(client, url, params=params, headers=_REQUEST_HEADERS, auth=auth, app_env=app_env, secrets=secrets)
             if response.status_code in (401, 403) and ck and cs:
                 response = _request_once(
                     client,
                     url,
                     params={**params, "consumer_key": ck, "consumer_secret": cs},
+                    headers=_REQUEST_HEADERS,
                     auth=None,
                     app_env=app_env,
                     secrets=secrets,
@@ -492,13 +604,27 @@ def _safe_currency(value: Any) -> str:
 
 
 def _https_url(value: Any, *, site_origin: str = "") -> str | None:
+    """Normalize HTTP/HTTPS or relative site paths to canonical HTTPS URLs (like toHttpsUrl)."""
     if not isinstance(value, str):
         return None
-    candidate = value.strip()
-    if candidate.startswith("/") and site_origin.startswith("https://"):
-        candidate = urljoin(f"{site_origin.rstrip('/')}/", candidate.lstrip("/"))
-    if not candidate.startswith("https://"):
+    candidate = unescape(value).replace("\\/", "/").strip().strip("\"'")
+    if not candidate:
         return None
+    if candidate.startswith("//"):
+        candidate = f"https:{candidate}"
+    elif candidate.startswith("/") and site_origin:
+        origin_https = f"https://{site_origin[7:]}" if site_origin.lower().startswith("http://") else site_origin
+        candidate = urljoin(f"{origin_https.rstrip('/')}/", candidate.lstrip("/"))
+    elif candidate.lower().startswith("wp-content/") and site_origin:
+        origin_https = f"https://{site_origin[7:]}" if site_origin.lower().startswith("http://") else site_origin
+        candidate = urljoin(f"{origin_https.rstrip('/')}/", candidate)
+    elif candidate.lower().startswith("http://"):
+        parsed = urlparse(candidate)
+        if parsed.hostname not in {"localhost", "127.0.0.1"}:
+            candidate = f"https://{candidate[7:]}"
+    if not candidate.lower().startswith("https://"):
+        return None
+    candidate = f"https://{candidate[8:]}"
     return candidate[:1000]
 
 
@@ -509,22 +635,29 @@ def _extract_pdf_urls_from_value(
     *,
     site_origin: str = "",
     media_by_id: dict[str, dict[str, Any]] | None = None,
+    allow_direct_non_pdf_url: bool = False,
     depth: int = 0,
 ) -> None:
-    if depth > 5 or value is None:
+    if depth > 6 or value is None:
         return
     if isinstance(value, int) or (isinstance(value, str) and value.strip().isdigit()):
         media_item = (media_by_id or {}).get(str(value).strip())
         if media_item and str(media_item.get("mime_type") or "") == "application/pdf":
             url = _https_url(media_item.get("source_url"), site_origin=site_origin)
-            if url:
+            if url and url not in found:
                 title = _plain(_field(media_item, "title.rendered", fallback_title), 180)
                 found[url] = title or fallback_title or "Product datasheet"
         return
     if isinstance(value, list):
         for nested in value[:24]:
             _extract_pdf_urls_from_value(
-                nested, fallback_title, found, site_origin=site_origin, media_by_id=media_by_id, depth=depth + 1
+                nested,
+                fallback_title,
+                found,
+                site_origin=site_origin,
+                media_by_id=media_by_id,
+                allow_direct_non_pdf_url=allow_direct_non_pdf_url,
+                depth=depth + 1,
             )
         return
     if isinstance(value, dict):
@@ -533,26 +666,46 @@ def _extract_pdf_urls_from_value(
             raw_url = value.get(key)
             if isinstance(raw_url, str):
                 _extract_pdf_urls_from_value(
-                    raw_url, title, found, site_origin=site_origin, media_by_id=media_by_id, depth=depth + 1
+                    raw_url,
+                    title,
+                    found,
+                    site_origin=site_origin,
+                    media_by_id=media_by_id,
+                    allow_direct_non_pdf_url=allow_direct_non_pdf_url,
+                    depth=depth + 1,
                 )
         for key in ("id", "attachment_id", "ID"):
             if key in value and isinstance(value[key], (int, str)):
                 _extract_pdf_urls_from_value(
-                    value[key], title, found, site_origin=site_origin, media_by_id=media_by_id, depth=depth + 1
+                    value[key],
+                    title,
+                    found,
+                    site_origin=site_origin,
+                    media_by_id=media_by_id,
+                    allow_direct_non_pdf_url=allow_direct_non_pdf_url,
+                    depth=depth + 1,
                 )
         for key, nested in value.items():
             if key not in {"url", "file", "source_url", "guid", "link", "href", "title", "name", "label", "id", "attachment_id", "ID"} and isinstance(nested, (dict, list)):
                 _extract_pdf_urls_from_value(
-                    nested, title, found, site_origin=site_origin, media_by_id=media_by_id, depth=depth + 1
+                    nested,
+                    title,
+                    found,
+                    site_origin=site_origin,
+                    media_by_id=media_by_id,
+                    allow_direct_non_pdf_url=allow_direct_non_pdf_url,
+                    depth=depth + 1,
                 )
         return
     if not isinstance(value, str):
         return
-    text = unescape(value.strip())
+    text = unescape(value.strip()).replace("\\/", "/")
     direct = _https_url(text, site_origin=site_origin)
-    urls = [direct] if direct and direct.lower().split("?", 1)[0].endswith(".pdf") else []
+    urls: list[str] = []
+    if direct and (allow_direct_non_pdf_url or direct.lower().split("?", 1)[0].endswith(".pdf")):
+        urls.append(direct)
     urls.extend(re.findall(r"https?://[^\s\"'<>]+?\.pdf(?:\?[^\s\"'<>]*)?", text, flags=re.IGNORECASE))
-    for rel in re.findall(r"(?:href|src)=[\"'](/[^\"']+?\.pdf(?:\?[^\"']*)?)[\"']", text, flags=re.IGNORECASE):
+    for rel in re.findall(r"(?:href|src|url)\s*[:=]\s*[\"']((?:/|wp-content/)[^\"']+?\.pdf(?:\?[^\"']*)?)[\"']", text, flags=re.IGNORECASE):
         resolved = _https_url(rel, site_origin=site_origin)
         if resolved:
             urls.append(resolved)
@@ -573,33 +726,39 @@ def _documents(
     source_id = str(product.get("id", ""))
     found: dict[str, str] = {}
     media_by_id = {str(item.get("id")): item for item in media if item.get("id") is not None}
-    candidates: list[tuple[Any, str]] = []
+    candidates: list[tuple[Any, str, bool]] = []
 
     downloads = product.get("downloads")
     if isinstance(downloads, list):
-        candidates.extend((item, "Product brochure") for item in downloads)
+        candidates.extend((item, "Product brochure", True) for item in downloads)
     if field_path.strip():
         mapped = _field(product, field_path.strip())
-        candidates.extend((item, "Product datasheet") for item in (mapped if isinstance(mapped, list) else [mapped]))
+        candidates.extend((item, "Product datasheet", False) for item in (mapped if isinstance(mapped, list) else [mapped]))
+
     for source_dict in (product, wp_record or {}):
         if isinstance(source_dict.get("acf"), dict):
             for key, val in source_dict["acf"].items():
-                if re.search(r"catalog(?:ue)?|pdf|datasheet|brochure|download|file|manual|spec", str(key), re.IGNORECASE):
-                    candidates.append((val, _plain(str(key).replace("_", " "), 180) or "Product datasheet"))
+                is_doc_key = bool(re.search(r"catalog(?:ue)?|pdf|datasheet|brochure|download|file|manual|spec", str(key), re.IGNORECASE))
+                if is_doc_key or (isinstance(val, str) and ".pdf" in val.lower()):
+                    candidates.append((val, _plain(str(key).replace("_", " "), 180) or "Product datasheet", False))
         for field in source_dict.get("meta_data", []) if isinstance(source_dict.get("meta_data"), list) else []:
             if not isinstance(field, dict):
                 continue
             key = str(field.get("key") or field.get("name") or "")
+            raw_val = field.get("value")
             if re.search(r"catalog(?:ue)?|pdf|datasheet|brochure|download", key, re.IGNORECASE):
-                candidates.append((field.get("value"), _plain(key.replace("_", " "), 180) or "Product datasheet"))
+                candidates.append((raw_val, _plain(key.replace("_", " "), 180) or "Product datasheet", False))
+            elif key.lower() == "_elementor_data" and isinstance(raw_val, str) and ".pdf" in raw_val.lower():
+                candidates.append((raw_val, "Product brochure", False))
 
-    for candidate, title in candidates:
+    for candidate, title, allow_non_pdf in candidates:
         _extract_pdf_urls_from_value(
             candidate,
             title,
             found,
             site_origin=site_origin,
             media_by_id=media_by_id,
+            allow_direct_non_pdf_url=allow_non_pdf,
         )
 
     for source_dict in (product, wp_record or {}):
@@ -613,14 +772,63 @@ def _documents(
 
     for item in media:
         attachment_parent = item.get("post") if item.get("post") is not None else item.get("parent")
-        if str(attachment_parent) != source_id:
+        if not source_id or str(attachment_parent) != source_id:
             continue
         mime = str(item.get("mime_type") or "")
         url = _https_url(item.get("source_url"), site_origin=site_origin)
-        if mime == "application/pdf" and url:
+        if (mime == "application/pdf" or (url and url.lower().split("?", 1)[0].endswith(".pdf"))) and url and url not in found:
             title = _plain(_field(item, "title.rendered", "Product document"), 180)
             found[url] = title or "Product document"
     return [{"title": title, "url": url} for url, title in list(found.items())[:24]]
+
+
+def _extract_html_pdf_documents(html_text: str, *, site_origin: str, default_title: str = "Product brochure") -> list[dict[str, str]]:
+    """Extract brochure PDF links from main page HTML while excluding global header/nav/footer menus."""
+    if not html_text:
+        return []
+    scoped = _HTML_STRIP_SECTIONS_RE.sub(" ", html_text)
+    main_match = re.search(r"<main\b[^>]*>(.*?)</main>", scoped, flags=re.IGNORECASE | re.DOTALL)
+    if main_match:
+        scoped = main_match.group(1)
+
+    found: dict[str, str] = {}
+    for pre_attrs, href, post_attrs, inner in _HTML_ANCHOR_RE.findall(scoped):
+        url = _https_url(href, site_origin=site_origin)
+        if not url:
+            continue
+        if not url.lower().split("?", 1)[0].endswith(".pdf"):
+            continue
+        label = _plain(inner, 160)
+        attrs_blob = f"{pre_attrs} {post_attrs}"
+        if label and _DOWNLOAD_HINT_RE.search(label):
+            title = default_title if re.fullmatch(r"download(?:\s+(?:now|pdf|brochure|catalogue|catalog))?", label, re.I) else label
+        elif _DOWNLOAD_HINT_RE.search(attrs_blob):
+            title = label or default_title
+        else:
+            title = label or default_title
+        if url not in found:
+            found[url] = title[:180]
+
+    # Secondary pass inside stripped content for JSON-escaped URLs in Elementor / JS data attributes.
+    unescaped = unescape(scoped).replace("\\/", "/")
+    for raw_url in re.findall(r"https?://[^\s\"'<>]+?\.pdf(?:\?[^\s\"'<>]*)?", unescaped, flags=re.IGNORECASE):
+        url = _https_url(raw_url.rstrip(".,);]"), site_origin=site_origin)
+        if url and url not in found:
+            found[url] = default_title
+    return [{"title": title, "url": url} for url, title in list(found.items())[:12]]
+
+
+def _fetch_html_page(url: str, *, site_origin: str, app_env: str) -> str:
+    try:
+        with httpx.Client(timeout=8, follow_redirects=False) as client:
+            resp = _request_once(
+                client, url, params=None, headers=_HTML_HEADERS, auth=None, app_env=app_env, secrets=()
+            )
+            if 200 <= resp.status_code < 300 and "html" in (resp.headers.get("content-type") or "html").lower():
+                return resp.text or ""
+    except httpx.HTTPError:
+        return ""
+    return ""
 
 
 def _extract_category_catalogue_pdf(
@@ -630,7 +838,6 @@ def _extract_category_catalogue_pdf(
     *,
     site_origin: str = "",
 ) -> tuple[str, str] | None:
-    """Extract a category/family-level brochure PDF URL and title from WordPress category REST data."""
     found: dict[str, str] = {}
     media_by_id = {str(item.get("id")): item for item in media if item.get("id") is not None}
     wp_id = str(category_source.get("id", ""))
@@ -641,7 +848,9 @@ def _extract_category_catalogue_pdf(
             continue
         if isinstance(record.get("acf"), dict):
             for key, val in record["acf"].items():
-                if re.search(r"catalog(?:ue)?|pdf|datasheet|brochure|download|file", str(key), re.IGNORECASE):
+                if re.search(r"catalog(?:ue)?|pdf|datasheet|brochure|download|file", str(key), re.IGNORECASE) or (
+                    isinstance(val, str) and ".pdf" in val.lower()
+                ):
                     _extract_pdf_urls_from_value(
                         val, f"{cat_name} Catalogue PDF", found, site_origin=site_origin, media_by_id=media_by_id
                     )
@@ -649,22 +858,24 @@ def _extract_category_catalogue_pdf(
             if not isinstance(field, dict):
                 continue
             key = str(field.get("key") or field.get("name") or "")
-            if re.search(r"catalog(?:ue)?|pdf|datasheet|brochure|download", key, re.IGNORECASE):
+            raw_val = field.get("value")
+            if re.search(r"catalog(?:ue)?|pdf|datasheet|brochure|download", key, re.IGNORECASE) or (
+                isinstance(raw_val, str) and ".pdf" in raw_val.lower()
+            ):
                 _extract_pdf_urls_from_value(
-                    field.get("value"), f"{cat_name} Catalogue PDF", found, site_origin=site_origin, media_by_id=media_by_id
+                    raw_val, f"{cat_name} Catalogue PDF", found, site_origin=site_origin, media_by_id=media_by_id
                 )
-        for desc_field in ("description",):
-            if isinstance(record.get(desc_field), str):
-                _extract_pdf_urls_from_value(
-                    record[desc_field], f"{cat_name} Catalogue PDF", found, site_origin=site_origin, media_by_id=media_by_id
-                )
+        if isinstance(record.get("description"), str):
+            _extract_pdf_urls_from_value(
+                record["description"], f"{cat_name} Catalogue PDF", found, site_origin=site_origin, media_by_id=media_by_id
+            )
 
     for item in media:
         attachment_parent = item.get("post") if item.get("post") is not None else item.get("parent")
         if wp_id and str(attachment_parent) == wp_id:
             mime = str(item.get("mime_type") or "")
             url = _https_url(item.get("source_url"), site_origin=site_origin)
-            if mime == "application/pdf" and url:
+            if (mime == "application/pdf" or (url and url.lower().split("?", 1)[0].endswith(".pdf"))) and url and url not in found:
                 title = _plain(_field(item, "title.rendered", f"{cat_name} Catalogue PDF"), 180)
                 found[url] = title or f"{cat_name} Catalogue PDF"
 
@@ -701,7 +912,6 @@ def _upsert_category_catalogue_mapping(
             )
         )
     else:
-        # Never wipe out CMS-curated category brochure PDFs on automated WP syncs
         if existing.source == "cms" and source == "wordpress":
             return
         existing.category_key = category.slug
@@ -782,11 +992,7 @@ def sync_woocommerce_catalogue(
             source_categories = _fetch_all(settings.wordpress_categories_path, authenticated=True, extra_params={"hide_empty": "false"})
         except HTTPException as primary_error:
             if store_path and primary_error.status_code in (502, 504):
-                logger.warning(
-                    "Primary WooCommerce REST failed (%s); falling back to Store API %s",
-                    primary_error.detail,
-                    store_path,
-                )
+                logger.warning("Primary WooCommerce REST failed (%s); falling back to Store API %s", primary_error.detail, store_path)
                 source_products = _fetch_all(store_path, authenticated=False)
                 source_categories = []
                 sync_source_mode = store_path
@@ -811,7 +1017,7 @@ def sync_woocommerce_catalogue(
     store_by_id = {str(row.get("id")): row for row in store_products if row.get("id") is not None}
 
     docs_path = getattr(settings, "wordpress_documents_path", "")
-    source_media = _optional_fetch_all(docs_path, extra_params={"mime_type": "application/pdf"}) if docs_path else []
+    source_media, media_fetch_status = _fetch_pdf_media_resilient(docs_path)
     wp_products_path = getattr(settings, "wordpress_wp_products_path", "")
     wp_categories_path = getattr(settings, "wordpress_wp_categories_path", "")
     wp_products = _optional_fetch_all(wp_products_path) if wp_products_path else []
@@ -830,6 +1036,8 @@ def sync_woocommerce_catalogue(
     categories_by_wp_id: dict[str, ProductCategory] = {}
     category_rows = 0
     category_catalogues_synced = 0
+    missing_cat_html_targets: list[tuple[ProductCategory, str, str]] = []
+
     for item in source_categories:
         wp_id = str(item.get("id", ""))
         name = _plain(item.get("name"), 180)
@@ -870,28 +1078,25 @@ def sync_woocommerce_catalogue(
         categories_by_wp_id[wp_id] = category
         category_rows += 1
 
-        cat_pdf = _extract_category_catalogue_pdf(
-            item,
-            wp_categories_by_id.get(wp_id),
-            source_media,
-            site_origin=site_origin,
-        )
+        cat_pdf = _extract_category_catalogue_pdf(item, wp_categories_by_id.get(wp_id), source_media, site_origin=site_origin)
         if cat_pdf is not None:
             cat_pdf_url, cat_pdf_title = cat_pdf
             _upsert_category_catalogue_mapping(
-                session,
-                category=category,
-                wp_id=wp_id,
-                pdf_url=cat_pdf_url,
-                title=cat_pdf_title,
-                source="wordpress",
+                session, category=category, wp_id=wp_id, pdf_url=cat_pdf_url, title=cat_pdf_title, source="wordpress"
             )
             category_catalogues_synced += 1
+        elif site_origin:
+            cat_link = _https_url(item.get("link") or _field(wp_categories_by_id.get(wp_id, {}), "link"), site_origin=site_origin)
+            if not cat_link:
+                cat_link = f"{site_origin}/product-category/{slug}/"
+            missing_cat_html_targets.append((category, wp_id, cat_link))
 
     created = updated = skipped = 0
+    matched_by_rest = matched_by_media = matched_by_html = 0
     source_wp_ids = {str(row.get("id")) for row in source_products if row.get("id") is not None}
     doc_field_path = getattr(settings, "wordpress_source_documents_field", "")
     synced_products: list[Product] = []
+    products_needing_html: list[tuple[Product, str]] = []
 
     for source in source_products:
         wp_id = str(source.get("id", ""))
@@ -908,8 +1113,6 @@ def sync_woocommerce_catalogue(
         product = session.scalar(select(Product).where(Product.wordpress_source_id == wp_id))
 
         if not selected_categories:
-            # If falling back to a degraded API payload without categories, preserve
-            # previously synced categories on existing products before using uncategorized.
             if product is not None and product.categories:
                 selected_categories = list(product.categories)
             else:
@@ -969,15 +1172,20 @@ def sync_woocommerce_catalogue(
         except (TypeError, ValueError):
             quantity = None
 
-        incoming_documents = _documents(
-            source,
-            source_media,
-            doc_field_path,
-            site_origin=site_origin,
-            wp_record=wp_products_by_id.get(wp_id),
+        rest_only_docs = _documents(
+            source, [], doc_field_path, site_origin=site_origin, wp_record=wp_products_by_id.get(wp_id)
         )
+        incoming_documents = (
+            rest_only_docs
+            if rest_only_docs
+            else _documents(source, source_media, doc_field_path, site_origin=site_origin, wp_record=wp_products_by_id.get(wp_id))
+        )
+        if rest_only_docs:
+            matched_by_rest += 1
+        elif incoming_documents:
+            matched_by_media += 1
+
         existing_documents = normalize_pdf_documents(product.documents) if product is not None else []
-        # Never wipe existing per-product PDF/document associations if incoming payload lacks one.
         documents = incoming_documents or existing_documents
 
         if product is None:
@@ -1019,6 +1227,52 @@ def sync_woocommerce_catalogue(
         product.draft_data = None
         synced_products.append(product)
 
+        if not documents and permalink:
+            products_needing_html.append((product, permalink))
+
+    # Optional scoped HTML fallback ONLY for items missing PDFs after REST & wp/v2/media.
+    html_fallback_enabled = bool(getattr(settings, "wordpress_html_fallback_enabled", False))
+    if html_fallback_enabled and site_origin and (products_needing_html or missing_cat_html_targets):
+        deadline = time.monotonic() + 25.0
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            cat_futures = {
+                pool.submit(_fetch_html_page, cat_url, site_origin=site_origin, app_env=app_env): (cat_obj, wp_id)
+                for cat_obj, wp_id, cat_url in missing_cat_html_targets
+            }
+            for fut in as_completed(cat_futures):
+                if time.monotonic() > deadline:
+                    break
+                cat_obj, wp_id = cat_futures[fut]
+                html_body = fut.result()
+                html_docs = _extract_html_pdf_documents(
+                    html_body, site_origin=site_origin, default_title=f"{cat_obj.name} Catalogue PDF"
+                )
+                if html_docs:
+                    _upsert_category_catalogue_mapping(
+                        session,
+                        category=cat_obj,
+                        wp_id=wp_id,
+                        pdf_url=html_docs[0]["url"],
+                        title=html_docs[0]["title"],
+                        source="wordpress",
+                    )
+                    category_catalogues_synced += 1
+
+            if time.monotonic() < deadline and products_needing_html:
+                prod_futures = {
+                    pool.submit(_fetch_html_page, purl, site_origin=site_origin, app_env=app_env): prod_obj
+                    for prod_obj, purl in products_needing_html
+                }
+                for fut in as_completed(prod_futures):
+                    if time.monotonic() > deadline:
+                        break
+                    prod_obj = prod_futures[fut]
+                    html_body = fut.result()
+                    html_docs = _extract_html_pdf_documents(html_body, site_origin=site_origin, default_title="Product brochure")
+                    if html_docs:
+                        prod_obj.documents = html_docs
+                        matched_by_html += 1
+
     withdrawn = 0
     for product in session.scalars(select(Product).where(Product.wordpress_source_id.is_not(None), Product.is_published.is_(True))):
         if product.wordpress_source_id not in source_wp_ids:
@@ -1037,6 +1291,11 @@ def sync_woocommerce_catalogue(
         change_summary={
             "source_mode": sync_source_mode,
             "fallback_used": fallback_used,
+            "media_fetch_status": media_fetch_status,
+            "media_pdf_count": len(source_media),
+            "matched_by_rest_fields": matched_by_rest,
+            "matched_by_wp_media": matched_by_media,
+            "matched_by_html": matched_by_html,
             "created": created,
             "updated": updated,
             "skipped": skipped,
@@ -1062,6 +1321,11 @@ def sync_woocommerce_catalogue(
         "source": "woocommerce",
         "source_mode": sync_source_mode,
         "fallback_used": fallback_used,
+        "media_fetch_status": media_fetch_status,
+        "media_pdf_count": len(source_media),
+        "matched_by_rest_fields": matched_by_rest,
+        "matched_by_wp_media": matched_by_media,
+        "matched_by_html": matched_by_html,
         "created": created,
         "updated": updated,
         "skipped": skipped,
@@ -1069,7 +1333,11 @@ def sync_woocommerce_catalogue(
         "categories": category_rows,
         "category_catalogues_synced": category_catalogues_synced,
         "documents_linked": resolved_with_pdfs,
-        "message": f"Synced {created + updated} WooCommerce products to the app catalogue ({resolved_with_pdfs} with PDFs linked).",
+        "message": (
+            f"Synced {created + updated} WooCommerce products "
+            f"({resolved_with_pdfs} with PDFs linked; {len(source_media)} WP media PDFs scanned, "
+            f"{category_catalogues_synced} category catalogues mapped)."
+        ),
     }
 
 
