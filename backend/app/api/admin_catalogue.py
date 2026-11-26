@@ -8,22 +8,38 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.auth import AdminIdentity, require_admin_roles
 from app.db.session import get_session
-from app.models import AppConfig, AuditEvent, Product, ProductCategory, ProductCategoryCatalogue
+from app.models import (
+    AppConfig,
+    AuditEvent,
+    ContactInquiry,
+    CustomerProfile,
+    CustomerRequest,
+    Product,
+    ProductCategory,
+    ProductCategoryCatalogue,
+)
 from app.schemas.cms import (
+    CatalogueSummaryAdmin,
     CategoryAdmin,
+    CategoryBulkVisibilityWrite,
     CategoryCatalogueAdmin,
     CategoryCatalogueWrite,
     CategoryPatch,
     CategoryWrite,
     ProductAdmin,
     ProductAdminPage,
+    ProductBulkCategoryWrite,
+    ProductCategoryOverrideWrite,
     ProductPatch,
+    ProductPdfOverrideWrite,
     ProductWrite,
 )
 from app.services.catalogue_documents import (
     CategoryCatalogueLookup,
     load_category_catalogue_lookup,
+    load_category_product_counts,
     resolve_product_documents,
+    resolve_product_documents_for_model,
 )
 
 router = APIRouter(prefix="/admin/catalogue", tags=["admin catalogue"])
@@ -66,7 +82,11 @@ def _category_payload(category: ProductCategory) -> dict[str, object]:
     }
 
 
-def _category_response(category: ProductCategory, lookup: CategoryCatalogueLookup | None = None) -> CategoryAdmin:
+def _category_response(
+    category: ProductCategory,
+    lookup: CategoryCatalogueLookup | None = None,
+    product_count: int = 0,
+) -> CategoryAdmin:
     draft = _category_payload(category)
     matched_catalogue = lookup.match_category(category) if lookup is not None else None
     return CategoryAdmin(
@@ -77,6 +97,8 @@ def _category_response(category: ProductCategory, lookup: CategoryCatalogueLooku
         sort_order=int(draft.get("sort_order", 0)),
         image_url=str(draft["image_url"]) if draft.get("image_url") else None,
         wordpress_source_id=category.wordpress_source_id,
+        cms_locked=bool(category.cms_locked),
+        product_count=product_count,
         is_published=category.is_published,
         has_draft=category.draft_data is not None,
         catalog_pdf_url=matched_catalogue.catalog_pdf_url if matched_catalogue else None,
@@ -153,12 +175,16 @@ def _product_response(product: Product, lookup: CategoryCatalogueLookup | None =
         parsed_category_ids = product.category_ids
 
     raw_docs = draft.get("documents", product.documents or [])
-    categories_for_doc = list(product.categories)
-    if product.category is not None and all(c.id != product.category.id for c in categories_for_doc):
+    categories_for_doc: list[ProductCategory] = []
+    if product.category is not None:
         categories_for_doc.append(product.category)
+    for category in product.categories:
+        if product.category is None or category.id != product.category.id:
+            categories_for_doc.append(category)
+    ordered_cat_ids = list(dict.fromkeys([parsed_cat_id, *parsed_category_ids]))
     resolved_docs, catalog_pdf_url, catalog_pdf_source = resolve_product_documents(
         raw_documents=raw_docs,
-        category_ids=parsed_category_ids,
+        category_ids=ordered_cat_ids,
         categories=categories_for_doc,
         lookup=lookup,
     )
@@ -190,6 +216,8 @@ def _product_response(product: Product, lookup: CategoryCatalogueLookup | None =
         source_reference=draft.get("source_reference", product.source_reference),
         wordpress_source_id=draft.get("wordpress_source_id") or product.wordpress_source_id,
         wordpress_source_url=draft.get("wordpress_source_url") or product.wordpress_source_url,
+        category_override=bool(product.category_override),
+        documents_override=bool(product.documents_override),
         is_published=product.is_published,
         has_draft=product.draft_data is not None,
         updated_at=updated_str,
@@ -219,10 +247,55 @@ def _product_response(product: Product, lookup: CategoryCatalogueLookup | None =
     )
 
 
+@router.get("/summary", response_model=CatalogueSummaryAdmin)
+def admin_catalogue_summary(
+    session: Session = Depends(get_session),
+    _admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),
+) -> CatalogueSummaryAdmin:
+    lookup = load_category_catalogue_lookup(session)
+    counts = load_category_product_counts(session, published_only=False)
+    products = list(session.scalars(select(Product).options(selectinload(Product.categories), selectinload(Product.category))))
+    categories = list(session.scalars(select(ProductCategory)))
+    open_service = session.scalar(
+        select(func.count()).select_from(CustomerRequest).where(
+            CustomerRequest.kind == "service",
+            CustomerRequest.status.notin_(["resolved", "closed"]),
+        )
+    ) or 0
+    open_quote = session.scalar(
+        select(func.count()).select_from(CustomerRequest).where(
+            CustomerRequest.kind == "quote",
+            CustomerRequest.status.notin_(["quote_sent", "closed"]),
+        )
+    ) or 0
+    open_inquiries = session.scalar(
+        select(func.count()).select_from(ContactInquiry).where(
+            ContactInquiry.status.notin_(["resolved", "closed"]),
+        )
+    ) or 0
+    customers_total = session.scalar(select(func.count()).select_from(CustomerProfile)) or 0
+    return CatalogueSummaryAdmin(
+        products_total=len(products),
+        products_published=sum(1 for item in products if item.is_published),
+        products_missing_pdf=sum(1 for item in products if resolve_product_documents_for_model(item, lookup)[1] is None),
+        products_category_overridden=sum(1 for item in products if item.category_override),
+        products_pdf_overridden=sum(1 for item in products if item.documents_override),
+        categories_total=len(categories),
+        categories_published=sum(1 for cat in categories if cat.is_published),
+        categories_hidden=sum(1 for cat in categories if not cat.is_published),
+        categories_empty=sum(1 for cat in categories if counts.get(cat.id, 0) == 0),
+        categories_missing_pdf=sum(1 for cat in categories if lookup.match_category(cat) is None),
+        open_service_requests=int(open_service),
+        open_quote_requests=int(open_quote),
+        open_contact_inquiries=int(open_inquiries),
+        customers_total=int(customers_total),
+    )
+
+
 @router.get("/categories", response_model=list[CategoryAdmin])
 def admin_categories(
     q: str | None = Query(default=None, max_length=120),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
     _admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),
@@ -233,7 +306,8 @@ def admin_categories(
         statement = statement.where(or_(ProductCategory.name.ilike(value), ProductCategory.slug.ilike(value)))
     rows = list(session.scalars(statement.order_by(ProductCategory.sort_order, ProductCategory.name).limit(limit).offset(offset)))
     lookup = load_category_catalogue_lookup(session)
-    return [_category_response(row, lookup) for row in rows]
+    counts = load_category_product_counts(session, published_only=False)
+    return [_category_response(row, lookup, product_count=counts.get(row.id, 0)) for row in rows]
 
 
 def _catalogue_mapping_response(mapping: ProductCategoryCatalogue) -> CategoryCatalogueAdmin:
@@ -355,10 +429,31 @@ def update_category(
     category = session.get(ProductCategory, category_id)
     if category is None:
         raise HTTPException(status_code=404, detail="Category not found")
-    if category.wordpress_source_id is not None:
-        raise HTTPException(status_code=409, detail="This category is managed by WordPress; change it in WordPress and sync again")
-    values = dict(_category_payload(category))
     patch = body.model_dump(exclude_unset=True, mode="json")
+    requested_lock = patch.pop("cms_locked", None)
+
+    if category.wordpress_source_id is not None:
+        if "slug" in patch and patch["slug"] != category.slug:
+            raise HTTPException(
+                status_code=409,
+                detail="WooCommerce collection slugs stay synced with WordPress; edit the display name or sort order instead",
+            )
+        values = dict(_category_payload(category))
+        values.update({key: value for key, value in patch.items() if key != "slug"})
+        validated = CategoryWrite.model_validate({**values, "slug": category.slug}).model_dump(mode="json")
+        category.name = validated["name"]
+        category.description = validated["description"]
+        category.sort_order = validated["sort_order"]
+        category.image_url = validated["image_url"]
+        category.draft_data = None
+        category.cms_locked = True if requested_lock is None else bool(requested_lock)
+        _audit(session, admin, "category.cms_overridden", "product_category", str(category.id), list(patch))
+        session.commit()
+        session.refresh(category)
+        counts = load_category_product_counts(session, published_only=False)
+        return _category_response(category, load_category_catalogue_lookup(session), product_count=counts.get(category.id, 0))
+
+    values = dict(_category_payload(category))
     values.update(patch)
     validated = CategoryWrite.model_validate(values).model_dump(mode="json")
     category.draft_data = validated
@@ -368,6 +463,8 @@ def update_category(
         category.description = validated["description"]
         category.sort_order = validated["sort_order"]
         category.image_url = validated["image_url"]
+    if requested_lock is not None:
+        category.cms_locked = bool(requested_lock)
     _audit(session, admin, "category.draft_saved", "product_category", str(category.id), list(patch))
     try:
         session.commit()
@@ -375,7 +472,8 @@ def update_category(
         session.rollback()
         raise HTTPException(status_code=409, detail="A category with this slug already exists") from error
     session.refresh(category)
-    return _category_response(category, load_category_catalogue_lookup(session))
+    counts = load_category_product_counts(session, published_only=False)
+    return _category_response(category, load_category_catalogue_lookup(session), product_count=counts.get(category.id, 0))
 
 
 @router.post("/categories/{category_id}/publish", response_model=CategoryAdmin)
@@ -388,7 +486,14 @@ def publish_category(
     if category is None:
         raise HTTPException(status_code=404, detail="Category not found")
     if category.wordpress_source_id is not None:
-        raise HTTPException(status_code=409, detail="This category is managed by WooCommerce; change it there and sync again")
+        category.is_published = True
+        category.cms_locked = True
+        category.draft_data = None
+        _audit(session, admin, "category.published", "product_category", str(category.id), ["is_published", "cms_locked"])
+        session.commit()
+        session.refresh(category)
+        counts = load_category_product_counts(session, published_only=False)
+        return _category_response(category, load_category_catalogue_lookup(session), product_count=counts.get(category.id, 0))
     values = CategoryWrite.model_validate(_category_payload(category)).model_dump(mode="json")
     category.slug = values["slug"]
     category.name = values["name"]
@@ -404,7 +509,8 @@ def publish_category(
         session.rollback()
         raise HTTPException(status_code=409, detail="A category with this slug already exists") from error
     session.refresh(category)
-    return _category_response(category, load_category_catalogue_lookup(session))
+    counts = load_category_product_counts(session, published_only=False)
+    return _category_response(category, load_category_catalogue_lookup(session), product_count=counts.get(category.id, 0))
 
 
 @router.post("/categories/{category_id}/unpublish", response_model=CategoryAdmin)
@@ -416,13 +522,37 @@ def unpublish_category(
     category = session.get(ProductCategory, category_id)
     if category is None:
         raise HTTPException(status_code=404, detail="Category not found")
-    if category.wordpress_source_id is not None:
-        raise HTTPException(status_code=409, detail="This category is managed by WordPress; change it there and sync again")
     category.is_published = False
+    if category.wordpress_source_id is not None:
+        category.cms_locked = True
     _audit(session, admin, "category.unpublished", "product_category", str(category.id), ["is_published"])
     session.commit()
     session.refresh(category)
-    return _category_response(category, load_category_catalogue_lookup(session))
+    counts = load_category_product_counts(session, published_only=False)
+    return _category_response(category, load_category_catalogue_lookup(session), product_count=counts.get(category.id, 0))
+
+
+@router.post("/categories/bulk-visibility", response_model=dict[str, int])
+def bulk_update_category_visibility(
+    body: CategoryBulkVisibilityWrite,
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),
+) -> dict[str, int]:
+    categories = list(session.scalars(select(ProductCategory).where(ProductCategory.id.in_(body.category_ids))))
+    for category in categories:
+        category.is_published = body.is_published
+        if category.wordpress_source_id is not None:
+            category.cms_locked = True
+    _audit(
+        session,
+        admin,
+        "category.bulk_visibility_updated",
+        "product_category",
+        ",".join(str(category.id) for category in categories[:10]),
+        [f"is_published={body.is_published}", f"count={len(categories)}"],
+    )
+    session.commit()
+    return {"updated": len(categories)}
 
 
 @router.get("/products", response_model=ProductAdminPage)
@@ -557,6 +687,145 @@ def publish_product(
     except IntegrityError as error:
         session.rollback()
         raise HTTPException(status_code=409, detail="A product with this slug already exists") from error
+    session.refresh(product)
+    return _product_response(product, load_category_catalogue_lookup(session))
+
+
+@router.put("/products/{product_id}/categories", response_model=ProductAdmin)
+def override_product_categories(
+    product_id: UUID,
+    body: ProductCategoryOverrideWrite,
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),
+) -> ProductAdmin:
+    product = session.scalar(
+        select(Product)
+        .options(selectinload(Product.categories), selectinload(Product.category))
+        .where(Product.id == product_id)
+    )
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    categories = _resolve_categories(session, body.category_ids)
+    product.category_id = body.category_id
+    product.categories = categories
+    if product.draft_data:
+        draft = dict(product.draft_data)
+        draft["category_id"] = str(body.category_id)
+        draft["category_ids"] = [str(value) for value in body.category_ids]
+        product.draft_data = draft
+    product.category_override = product.wordpress_source_id is not None and not body.sync_with_wordpress
+    _audit(
+        session,
+        admin,
+        "product.categories_overridden",
+        "product",
+        str(product.id),
+        ["category_id", "category_ids", f"category_override={product.category_override}"],
+    )
+    session.commit()
+    session.refresh(product)
+    return _product_response(product, load_category_catalogue_lookup(session))
+
+
+@router.post("/products/bulk-category", response_model=dict[str, int])
+def bulk_override_product_category(
+    body: ProductBulkCategoryWrite,
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),
+) -> dict[str, int]:
+    primary_category = session.get(ProductCategory, body.category_id)
+    if primary_category is None:
+        raise HTTPException(status_code=422, detail="Select an existing collection for the bulk update")
+    products = list(
+        session.scalars(
+            select(Product)
+            .options(selectinload(Product.categories), selectinload(Product.category))
+            .where(Product.id.in_(body.product_ids))
+        )
+    )
+    for product in products:
+        product.category_id = primary_category.id
+        if body.keep_secondary_categories:
+            existing = [cat for cat in product.categories if cat.id != primary_category.id]
+            product.categories = [primary_category, *existing]
+        else:
+            product.categories = [primary_category]
+        if product.draft_data:
+            draft = dict(product.draft_data)
+            draft["category_id"] = str(primary_category.id)
+            draft["category_ids"] = [str(cat.id) for cat in product.categories]
+            product.draft_data = draft
+        if product.wordpress_source_id is not None:
+            product.category_override = True
+    _audit(
+        session,
+        admin,
+        "product.bulk_category_overridden",
+        "product",
+        str(primary_category.id),
+        [f"category_id={primary_category.id}", f"count={len(products)}"],
+    )
+    session.commit()
+    return {"updated": len(products)}
+
+
+@router.put("/products/{product_id}/pdf", response_model=ProductAdmin)
+def override_product_pdf(
+    product_id: UUID,
+    body: ProductPdfOverrideWrite,
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),
+) -> ProductAdmin:
+    product = session.scalar(
+        select(Product)
+        .options(selectinload(Product.categories), selectinload(Product.category))
+        .where(Product.id == product_id)
+    )
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    clean_doc = {"title": body.title.strip(), "url": body.url.strip()}
+    product.documents = [clean_doc]
+    if product.draft_data:
+        draft = dict(product.draft_data)
+        draft["documents"] = [clean_doc]
+        product.draft_data = draft
+    if product.wordpress_source_id is not None:
+        product.documents_override = True
+    _audit(session, admin, "product.pdf_overridden", "product", str(product.id), ["documents", "documents_override"])
+    session.commit()
+    session.refresh(product)
+    return _product_response(product, load_category_catalogue_lookup(session))
+
+
+@router.delete("/products/{product_id}/pdf", response_model=ProductAdmin)
+def clear_product_pdf_override(
+    product_id: UUID,
+    sync_with_wordpress: bool = Query(default=False),
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles(*CONTENT_ROLES)),
+) -> ProductAdmin:
+    product = session.scalar(
+        select(Product)
+        .options(selectinload(Product.categories), selectinload(Product.category))
+        .where(Product.id == product_id)
+    )
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    product.documents = []
+    if product.draft_data:
+        draft = dict(product.draft_data)
+        draft["documents"] = []
+        product.draft_data = draft
+    product.documents_override = product.wordpress_source_id is not None and not sync_with_wordpress
+    _audit(
+        session,
+        admin,
+        "product.pdf_cleared",
+        "product",
+        str(product.id),
+        ["documents", f"documents_override={product.documents_override}"],
+    )
+    session.commit()
     session.refresh(product)
     return _product_response(product, load_category_catalogue_lookup(session))
 

@@ -18,9 +18,11 @@ class HomeScreen extends StatelessWidget {
     required this.categories,
     required this.products,
     required this.productSelection,
+    this.onRefresh,
   });
   final ValueChanged<int> onNavigate;
   final ValueChanged<String> onOpenCategory;
+  final Future<void> Function()? onRefresh;
   final Future<Map<String, dynamic>> appContent;
   final CatalogueRepository catalogue;
   final Future<List<ProductCategory>> categories;
@@ -34,8 +36,11 @@ class HomeScreen extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => CustomScrollView(
-    slivers: [
+  Widget build(BuildContext context) => RefreshIndicator(
+    onRefresh: onRefresh ?? () async {},
+    child: CustomScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      slivers: [
       SliverPadding(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
         sliver: SliverList.list(
@@ -335,6 +340,7 @@ class HomeScreen extends StatelessWidget {
         ),
       ),
     ],
+    ),
   );
 
   Widget _cmsSections(BuildContext context, Map<dynamic, dynamic> home) {
@@ -475,14 +481,17 @@ class HomeScreen extends StatelessWidget {
   );
 
   Widget _featuredProducts(BuildContext context, Map<dynamic, dynamic> home) =>
-      FutureBuilder<ProductPageData>(
-        future: products,
+      FutureBuilder<List<dynamic>>(
+        future: Future.wait([products, categories]),
         builder: (context, snapshot) {
+          final pageData = snapshot.data != null ? snapshot.data![0] as ProductPageData : null;
+          final catList = snapshot.data != null ? snapshot.data![1] as List<ProductCategory> : const <ProductCategory>[];
+          final catById = {for (final cat in catList) cat.id: cat.name};
           final idsRaw = home['featured_product_ids'];
           final ids = idsRaw is List
               ? idsRaw.map((item) => item.toString()).toSet()
               : <String>{};
-          final values = (snapshot.data?.items ?? const <ProductSummary>[])
+          final values = (pageData?.items ?? const <ProductSummary>[])
               .where((product) => ids.isEmpty || ids.contains(product.id))
               .take(6)
               .toList();
@@ -533,6 +542,7 @@ class HomeScreen extends StatelessWidget {
                         subtitle: Text(
                           product.summary ??
                               product.modelCode ??
+                              catById[product.categoryId] ??
                               'Published product',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -545,7 +555,7 @@ class HomeScreen extends StatelessWidget {
                               repository: catalogue,
                               selection: productSelection,
                               product: product,
-                              category: 'Product',
+                              category: catById[product.categoryId] ?? 'Product',
                             ),
                           ),
                         ),

@@ -17,6 +17,7 @@ class CategoryPublic(BaseModel):
     name: str
     description: str | None
     image_url: str | None
+    product_count: int = 0
 
 
 class ProductPublic(BaseModel):

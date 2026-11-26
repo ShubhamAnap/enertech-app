@@ -20,6 +20,7 @@ from app.schemas.catalogue import CategoryPublic, ProductDocument, ProductPage, 
 from app.services.catalogue_documents import (
     CategoryCatalogueLookup,
     load_category_catalogue_lookup,
+    load_category_product_counts,
     resolve_product_documents_for_model,
 )
 
@@ -56,10 +57,30 @@ def readiness(session: Session = Depends(get_session)) -> dict[str, str]:
 
 
 @router.get("/catalogue/categories", response_model=list[CategoryPublic], tags=["catalogue"])
-def list_categories(session: Session = Depends(get_session)) -> list[ProductCategory]:
+def list_categories(session: Session = Depends(get_session)) -> list[CategoryPublic]:
     require_database()
-    statement = select(ProductCategory).where(ProductCategory.is_published.is_(True)).order_by(ProductCategory.sort_order, ProductCategory.name)
-    return list(session.scalars(statement))
+    counts = load_category_product_counts(session, published_only=True)
+    statement = (
+        select(ProductCategory)
+        .where(ProductCategory.is_published.is_(True))
+        .order_by(ProductCategory.sort_order, ProductCategory.name)
+    )
+    categories = [
+        category
+        for category in session.scalars(statement)
+        if counts.get(category.id, 0) > 0
+    ]
+    return [
+        CategoryPublic(
+            id=category.id,
+            slug=category.slug,
+            name=category.name,
+            description=category.description,
+            image_url=category.image_url,
+            product_count=counts.get(category.id, 0),
+        )
+        for category in categories
+    ]
 
 
 def _public_product_response(product: Product, lookup: CategoryCatalogueLookup) -> ProductPublic:

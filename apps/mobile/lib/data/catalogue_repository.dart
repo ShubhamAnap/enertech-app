@@ -191,6 +191,10 @@ class CatalogueRepository {
           changed = true;
           return <String, dynamic>{
             ...entry,
+            if (detailJson.containsKey('category_id'))
+              'category_id': detailJson['category_id'],
+            if (detailJson.containsKey('category_ids'))
+              'category_ids': detailJson['category_ids'],
             if (detailJson.containsKey('documents'))
               'documents': detailJson['documents'],
             if (detailJson.containsKey('catalog_pdf_url'))

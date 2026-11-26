@@ -60,8 +60,11 @@ class MediaAssetPublic(BaseModel):
     size_bytes: int
 
 
-def _detect_media(payload: bytes) -> tuple[str, str] | None:
+def detect_media_payload(payload: bytes, *, allow_pdf: bool = True) -> tuple[str, str] | None:
+    """Detect supported image (or optional PDF) MIME type and file extension from magic bytes."""
     for content_type, (signature, extension) in ALLOWED_SIGNATURES.items():
+        if not allow_pdf and content_type == "application/pdf":
+            continue
         if payload.startswith(signature):
             return content_type, extension
     if len(payload) >= 12 and payload.startswith(b"RIFF") and payload[8:12] == b"WEBP":
@@ -69,25 +72,24 @@ def _detect_media(payload: bytes) -> tuple[str, str] | None:
     return None
 
 
-@router.post("/upload", response_model=MediaAssetPublic, status_code=status.HTTP_201_CREATED)
-async def upload_media(
-    file: UploadFile = File(...),
-    session: Session = Depends(get_session),
-    admin: AdminIdentity = Depends(require_admin_roles(*EDITOR_ROLES)),
+async def upload_media_bytes_to_storage(
+    *,
+    payload: bytes,
+    content_type: str,
+    extension: str,
+    folder: str,
+    actor_uid: str,
+    audit_action: str,
+    session: Session,
 ) -> MediaAssetPublic:
+    """Upload validated bytes into Supabase Storage and record an audit event."""
     settings = get_settings()
     if not settings.supabase_url or not settings.supabase_service_role_key or not settings.supabase_public_media_bucket:
         raise HTTPException(status_code=503, detail="Configure Supabase Storage server settings before uploading media")
-    payload = await file.read(MAX_FILE_BYTES + 1)
-    if not payload or len(payload) > MAX_FILE_BYTES:
-        raise HTTPException(status_code=413, detail="Choose a file smaller than 20 MB")
-    detected = _detect_media(payload)
-    if detected is None:
-        raise HTTPException(status_code=415, detail="Upload a PNG, JPEG, WebP image, or PDF document")
-    content_type, extension = detected
     base_url = settings.supabase_url.rstrip("/")
     bucket = settings.supabase_public_media_bucket.strip()
-    storage_path = f"cms/{uuid4().hex}{extension}"
+    clean_folder = folder.strip("/")
+    storage_path = f"{clean_folder}/{uuid4().hex}{extension}" if clean_folder else f"{uuid4().hex}{extension}"
     storage_url = f"{base_url}/storage/v1/object/{bucket}/{storage_path}"
     upload_headers = {
         "apikey": settings.supabase_service_role_key,
@@ -121,11 +123,38 @@ async def upload_media(
         raise HTTPException(status_code=502, detail="Supabase Storage rejected the upload; check the bucket and server key")
     public_url = f"{base_url}/storage/v1/object/public/{bucket}/{storage_path}"
     session.add(AuditEvent(
-        actor_uid=admin.uid,
-        action="media.uploaded",
+        actor_uid=actor_uid,
+        action=audit_action,
         entity_type="media_asset",
         entity_id=storage_path,
         change_summary={"content_type": content_type, "size_bytes": len(payload)},
     ))
     session.commit()
     return MediaAssetPublic(url=public_url, path=storage_path, bucket=bucket, content_type=content_type, size_bytes=len(payload))
+
+
+@router.post("/upload", response_model=MediaAssetPublic, status_code=status.HTTP_201_CREATED)
+async def upload_media(
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    admin: AdminIdentity = Depends(require_admin_roles(*EDITOR_ROLES)),
+) -> MediaAssetPublic:
+    settings = get_settings()
+    if not settings.supabase_url or not settings.supabase_service_role_key or not settings.supabase_public_media_bucket:
+        raise HTTPException(status_code=503, detail="Configure Supabase Storage server settings before uploading media")
+    payload = await file.read(MAX_FILE_BYTES + 1)
+    if not payload or len(payload) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Choose a file smaller than 20 MB")
+    detected = detect_media_payload(payload, allow_pdf=True)
+    if detected is None:
+        raise HTTPException(status_code=415, detail="Upload a PNG, JPEG, WebP image, or PDF document")
+    content_type, extension = detected
+    return await upload_media_bytes_to_storage(
+        payload=payload,
+        content_type=content_type,
+        extension=extension,
+        folder="cms",
+        actor_uid=admin.uid,
+        audit_action="media.uploaded",
+        session=session,
+    )

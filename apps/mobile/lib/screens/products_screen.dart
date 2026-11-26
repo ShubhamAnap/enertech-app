@@ -17,10 +17,12 @@ class ProductsScreen extends StatefulWidget {
     required this.repository,
     required this.selection,
     this.selectedCategorySlug,
+    this.refreshVersion = 0,
   });
   final CatalogueRepository repository;
   final ProductSelectionStore selection;
   final String? selectedCategorySlug;
+  final int refreshVersion;
 
   @override
   State<ProductsScreen> createState() => _ProductsScreenState();
@@ -49,7 +51,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
   @override
   void didUpdateWidget(covariant ProductsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.selectedCategorySlug != widget.selectedCategorySlug) {
+    if (oldWidget.selectedCategorySlug != widget.selectedCategorySlug ||
+        oldWidget.refreshVersion != widget.refreshVersion) {
       _selectedCategory = widget.selectedCategorySlug;
       _offset = 0;
       _load();
@@ -109,8 +112,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => CustomScrollView(
-    slivers: [
+  Widget build(BuildContext context) => RefreshIndicator(
+    onRefresh: _load,
+    child: CustomScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      slivers: [
       SliverPadding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
         sliver: SliverList.list(
@@ -358,7 +364,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
             ),
           ),
         ),
-    ],
+      ],
+    ),
   );
 }
 

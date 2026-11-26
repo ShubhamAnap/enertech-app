@@ -56,12 +56,99 @@ class CustomerRequestsRepository {
         .toList(growable: false);
   }
 
+  Future<String> uploadServicePhoto(File file) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw const HttpException('Sign in before uploading photos.');
+    }
+    if (!user.emailVerified) {
+      throw const HttpException('Verify your email before uploading photos.');
+    }
+    final base = Uri.tryParse(baseUrl);
+    if (base == null || !base.hasScheme || !base.hasAuthority) {
+      throw const HttpException('The customer platform API is not configured.');
+    }
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty || bytes.length > 10 * 1024 * 1024) {
+      throw const HttpException('Choose a photo smaller than 10 MB.');
+    }
+    final root = base.path.endsWith('/')
+        ? base
+        : base.replace(path: '${base.path}/');
+    final uri = root.resolve('requests/service/upload');
+    final rawName = file.uri.pathSegments.isNotEmpty
+        ? file.uri.pathSegments.last
+        : 'photo.jpg';
+    final safeName = rawName.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final lower = safeName.toLowerCase();
+    final contentType = lower.endsWith('.png')
+        ? 'image/png'
+        : lower.endsWith('.webp')
+            ? 'image/webp'
+            : 'image/jpeg';
+    final boundary = 'enertechBoundary${DateTime.now().microsecondsSinceEpoch}';
+    final header = utf8.encode(
+      '--$boundary\r\n'
+      'Content-Disposition: form-data; name="file"; filename="$safeName"\r\n'
+      'Content-Type: $contentType\r\n\r\n',
+    );
+    final footer = utf8.encode('\r\n--$boundary--\r\n');
+    final totalLength = header.length + bytes.length + footer.length;
+
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+    try {
+      final request = await client
+          .postUrl(uri)
+          .timeout(const Duration(seconds: 10));
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        'Bearer ${await user.getIdToken()}',
+      );
+      request.headers.contentType = ContentType(
+        'multipart',
+        'form-data',
+        parameters: {'boundary': boundary},
+      );
+      request.contentLength = totalLength;
+      request.add(header);
+      request.add(bytes);
+      request.add(footer);
+      final response = await request.close().timeout(
+        const Duration(seconds: 25),
+      );
+      final text = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 10));
+      final decoded = text.isEmpty ? null : jsonDecode(text);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final message = decoded is Map<String, dynamic>
+            ? decoded['detail'] as String?
+            : null;
+        throw HttpException(
+          message ?? 'Could not upload photo (${response.statusCode}).',
+        );
+      }
+      final url = decoded is Map<String, dynamic>
+          ? decoded['url'] as String?
+          : null;
+      if (url == null || !url.startsWith('https://')) {
+        throw const HttpException('Upload did not return a valid photo URL.');
+      }
+      return url;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<CustomerRequestRecord> submitService({
     required String model,
     required String category,
     required String description,
     required String location,
     String? serial,
+    List<String> attachments = const [],
   }) async {
     final payload = {
       'product_model': model,
@@ -69,6 +156,7 @@ class CustomerRequestsRepository {
       'problem_category': category,
       'description': description,
       'service_location': location,
+      if (attachments.isNotEmpty) 'attachments': attachments,
     };
     final value = await _request('POST', '/requests/service', body: payload);
     return CustomerRequestRecord.fromJson(value as Map<String, dynamic>);

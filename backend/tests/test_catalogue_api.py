@@ -442,23 +442,59 @@ def test_catalogue_rejects_invalid_featured_product_ids(client: TestClient) -> N
     assert client.get("/api/v1/catalogue/products?ids=" + ",".join(str(uuid4()) for _ in range(13))).status_code == 422
 
 
-def test_woocommerce_catalogue_rows_cannot_be_edited_published_or_deleted_in_cms(client: TestClient) -> None:
-    category_id, product_id = uuid4(), uuid4()
+def test_woocommerce_products_keep_content_locked_while_allowing_category_and_pdf_overrides(client: TestClient) -> None:
+    category_id, alt_category_id, product_id = uuid4(), uuid4(), uuid4()
     with Session(api_router.engine) as session:
         session.add(AdminAccount(firebase_uid="catalogue-admin", role="admin", is_active=True))
-        session.add(ProductCategory(id=category_id, slug="wp-read-only", name="WooCommerce collection", wordpress_source_id="wp-category-90", is_published=True))
+        session.add_all([
+            ProductCategory(id=category_id, slug="wp-read-only", name="WooCommerce collection", wordpress_source_id="wp-category-90", is_published=True),
+            ProductCategory(id=alt_category_id, slug="cms-curated-cat", name="Curated UPS", is_published=True),
+        ])
         session.add(Product(id=product_id, category_id=category_id, slug="wp-read-only-product", name="WooCommerce product", wordpress_source_id="wp-product-90", is_published=True))
         session.commit()
     app.dependency_overrides[get_current_identity] = lambda: Identity(
         "catalogue-admin", "admin@example.test", "Admin", {"email_verified": True}
     )
 
+    # Full content edits and destructive deletes remain protected for WooCommerce-sourced records.
     assert client.patch(f"/api/v1/admin/catalogue/products/{product_id}", json={"name": "Local override"}).status_code == 409
     assert client.post(f"/api/v1/admin/catalogue/products/{product_id}/publish").status_code == 409
     assert client.delete(f"/api/v1/admin/catalogue/products/{product_id}").status_code == 409
-    assert client.patch(f"/api/v1/admin/catalogue/categories/{category_id}", json={"name": "Local override"}).status_code == 409
-    assert client.post(f"/api/v1/admin/catalogue/categories/{category_id}/publish").status_code == 409
     assert client.delete(f"/api/v1/admin/catalogue/categories/{category_id}").status_code == 409
+    assert client.patch(f"/api/v1/admin/catalogue/categories/{category_id}", json={"slug": "changed-slug"}).status_code == 409
+
+    # CMS can hide/show and rename WooCommerce categories (locking against future WP sync overwrites).
+    hidden_resp = client.post(f"/api/v1/admin/catalogue/categories/{category_id}/unpublish")
+    assert hidden_resp.status_code == 200
+    assert hidden_resp.json()["is_published"] is False
+    assert hidden_resp.json()["cms_locked"] is True
+
+    renamed_resp = client.patch(f"/api/v1/admin/catalogue/categories/{category_id}", json={"name": "Online UPS Series", "sort_order": 5})
+    assert renamed_resp.status_code == 200
+    assert renamed_resp.json()["name"] == "Online UPS Series"
+    assert renamed_resp.json()["sort_order"] == 5
+
+    # CMS can reassign a WooCommerce product's collection & PDF independently.
+    cat_override = client.put(
+        f"/api/v1/admin/catalogue/products/{product_id}/categories",
+        json={"category_id": str(alt_category_id), "category_ids": [str(alt_category_id)]},
+    )
+    assert cat_override.status_code == 200
+    assert cat_override.json()["category_id"] == str(alt_category_id)
+    assert cat_override.json()["category_override"] is True
+
+    pdf_override = client.put(
+        f"/api/v1/admin/catalogue/products/{product_id}/pdf",
+        json={"title": "Verified Datasheet", "url": "https://cdn.example.test/enertech-public/cms/verified.pdf"},
+    )
+    assert pdf_override.status_code == 200
+    assert pdf_override.json()["catalog_pdf_url"] == "https://cdn.example.test/enertech-public/cms/verified.pdf"
+    assert pdf_override.json()["documents_override"] is True
+
+    pdf_cleared = client.delete(f"/api/v1/admin/catalogue/products/{product_id}/pdf")
+    assert pdf_cleared.status_code == 200
+    assert pdf_cleared.json()["documents_override"] is True
+    assert pdf_cleared.json()["catalog_pdf_url"] is None
 
 
 def test_admin_product_page_accepts_product_admin_items(client: TestClient) -> None:
@@ -888,3 +924,144 @@ def test_woocommerce_store_fallback_preserves_existing_descriptions_and_specs(
     assert "Heavy duty UPS" in detail["description"]
     assert detail["specifications"] == {"Capacity": ["30 kVA"]}
     assert detail["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/30kva-ups.pdf"
+
+
+def test_cms_overrides_and_smart_category_selection_survive_wordpress_sync(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = SimpleNamespace(
+        app_env="production",
+        wordpress_api_base_url="https://enertechups.com/wp-json",
+        wordpress_products_path="wc/v3/products",
+        wordpress_categories_path="wc/v3/products/categories",
+        wordpress_store_products_path="",
+        wordpress_documents_path="",
+        wordpress_wp_products_path="",
+        wordpress_wp_categories_path="",
+        wordpress_consumer_key="ck_test",
+        wordpress_consumer_secret="cs_test",
+        wordpress_source_title_field="name",
+        wordpress_source_slug_field="slug",
+        wordpress_source_summary_field="short_description",
+        wordpress_source_description_field="description",
+        wordpress_source_model_field="sku",
+        wordpress_source_image_field="images.0.src",
+        wordpress_source_specifications_field="attributes",
+        wordpress_source_applications_field="",
+        wordpress_source_features_field="",
+        wordpress_source_documents_field="",
+        wordpress_html_fallback_enabled=False,
+    )
+    dataset = {
+        "wc/v3/products/categories": [
+            {"id": 10, "name": "Power Products", "slug": "power-products", "description": ""},
+            {"id": 11, "name": "Servo Stabilizer", "slug": "servo-stabilizer", "description": ""},
+            {"id": 12, "name": "Empty SEO Tag", "slug": "empty-seo-tag", "description": "", "count": 0},
+        ],
+        "wc/v3/products": [
+            {
+                "id": 7001,
+                "name": "60 KVA Servo Voltage Stabilizer",
+                "slug": "60-kva-servo-stabilizer",
+                "sku": "ET-SVS-60",
+                "description": '<p>Stabilizer <a href="https://enertechups.com/wp-content/uploads/wrong.pdf">Wrong PDF</a></p>',
+                "short_description": "",
+                "permalink": "https://enertechups.com/shop/60-kva-servo-stabilizer/",
+                "images": [],
+                "categories": [{"id": 10}, {"id": 11}],
+                "attributes": [],
+                "price": "50000",
+                "stock_status": "instock",
+            },
+            {
+                "id": 7002,
+                "name": "30 KVA UPS",
+                "slug": "30-kva-ups-7002",
+                "sku": "ET-UPS-30",
+                "description": "<p>Online UPS</p>",
+                "short_description": "",
+                "permalink": "https://enertechups.com/shop/30-kva-ups-7002/",
+                "images": [],
+                "categories": [{"id": 10}],
+                "attributes": [],
+                "price": "40000",
+                "stock_status": "instock",
+            },
+        ],
+    }
+    monkeypatch.setattr(wordpress_api, "get_settings", lambda: settings)
+    monkeypatch.setattr(wordpress_api, "_fetch_all", lambda path, **_kwargs: dataset.get(path, []))
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="override-admin", role="super_admin", is_active=True))
+        session.commit()
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "override-admin", "admin@example.test", "Admin", {"email_verified": True}
+    )
+
+    first = client.post("/api/v1/admin/integrations/wordpress/sync")
+    assert first.status_code == 200, first.text
+
+    # Empty SEO category imported unpublished and omitted from public catalogue categories.
+    cats_admin = {row["slug"]: row for row in client.get("/api/v1/admin/catalogue/categories").json()}
+    assert cats_admin["empty-seo-tag"]["is_published"] is False
+    assert cats_admin["empty-seo-tag"]["product_count"] == 0
+    public_slugs = {row["slug"] for row in client.get("/api/v1/catalogue/categories").json()}
+    assert "empty-seo-tag" not in public_slugs
+
+    # Smart default picks specific leaf "servo-stabilizer" over broad "power-products".
+    prods_admin = {row["slug"]: row for row in client.get("/api/v1/admin/catalogue/products").json()["items"]}
+    svs = prods_admin["60-kva-servo-stabilizer"]
+    assert svs["category_id"] == cats_admin["servo-stabilizer"]["id"]
+
+    # Hide "power-products" in CMS, attach Collection PDF to "servo-stabilizer", and clear wrong WP PDF on 60 KVA SVS.
+    assert client.post(f"/api/v1/admin/catalogue/categories/{cats_admin['power-products']['id']}/unpublish").status_code == 200
+    assert client.put("/api/v1/admin/catalogue/category-catalogues", json={
+        "category_key": "servo-stabilizer",
+        "category_id": cats_admin["servo-stabilizer"]["id"],
+        "title": "Servo Brochure",
+        "catalog_pdf_url": "https://cdn.example.test/enertech-public/cms/servo.pdf",
+    }).status_code == 200
+    assert client.delete(f"/api/v1/admin/catalogue/products/{svs['id']}/pdf").status_code == 200
+
+    # Re-assign 30 KVA UPS via CMS override + verify bulk category endpoint & summary.
+    ups = prods_admin["30-kva-ups-7002"]
+    assert client.put(
+        f"/api/v1/admin/catalogue/products/{ups['id']}/categories",
+        json={"category_id": cats_admin["servo-stabilizer"]["id"], "category_ids": [cats_admin["servo-stabilizer"]["id"]]},
+    ).status_code == 200
+
+    # Re-sync from WordPress -> CMS hidden category stays hidden, cleared PDF stays cleared (inheriting servo.pdf), category override stays intact!
+    second = client.post("/api/v1/admin/integrations/wordpress/sync")
+    assert second.status_code == 200, second.text
+    assert second.json()["cms_preserved_categories"] >= 1
+    assert second.json()["cms_preserved_category_products"] >= 1
+    assert second.json()["cms_preserved_pdf_products"] >= 1
+
+    cats_after = {row["slug"]: row for row in client.get("/api/v1/admin/catalogue/categories").json()}
+    assert cats_after["power-products"]["is_published"] is False
+    svs_after = client.get("/api/v1/catalogue/products/60-kva-servo-stabilizer").json()
+    assert svs_after["catalog_pdf_url"] == "https://cdn.example.test/enertech-public/cms/servo.pdf"
+    ups_after = client.get("/api/v1/catalogue/products/30-kva-ups-7002").json()
+    assert ups_after["category_id"] == cats_admin["servo-stabilizer"]["id"]
+
+    summary = client.get("/api/v1/admin/catalogue/summary")
+    assert summary.status_code == 200
+    assert summary.json()["products_total"] == 2
+    assert summary.json()["categories_empty"] == 1
+    assert summary.json()["products_category_overridden"] == 1
+
+
+def test_service_request_accepts_attachments(client: TestClient) -> None:
+    identity = Identity("customer-img", "img@example.test", "Img Customer", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: identity
+    res = client.post("/api/v1/requests/service", json={
+        "product_model": "HTXi-100",
+        "problem_category": "alarm",
+        "description": "Display showing battery low warning after outage.",
+        "service_location": "Pune, 411001",
+        "attachments": ["https://storage.example.test/enertech-public/service-requests/customer-img/photo1.jpg"],
+    })
+    assert res.status_code == 201, res.text
+    assert res.json()["payload"]["attachments"] == [
+        "https://storage.example.test/enertech-public/service-requests/customer-img/photo1.jpg"
+    ]

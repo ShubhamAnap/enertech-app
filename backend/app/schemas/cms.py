@@ -21,6 +21,7 @@ class CategoryPatch(BaseModel):
     description: str | None = Field(default=None, max_length=3000)
     sort_order: int | None = Field(default=None, ge=0, le=10000)
     image_url: HttpUrl | None = None
+    cms_locked: bool | None = None
 
 
 class CategoryAdmin(BaseModel):
@@ -33,11 +34,57 @@ class CategoryAdmin(BaseModel):
     sort_order: int
     image_url: str | None
     wordpress_source_id: str | None
+    cms_locked: bool = False
+    product_count: int = 0
     is_published: bool
     has_draft: bool
     catalog_pdf_url: str | None = None
     catalog_pdf_title: str | None = None
     published_payload: dict[str, object] | None = None
+
+
+class CategoryBulkVisibilityWrite(BaseModel):
+    category_ids: list[UUID] = Field(min_length=1, max_length=200)
+    is_published: bool
+
+
+class ProductCategoryOverrideWrite(BaseModel):
+    category_id: UUID
+    category_ids: list[UUID] = Field(default_factory=list, max_length=50)
+    sync_with_wordpress: bool = False
+
+    @model_validator(mode="after")
+    def include_primary_category(self) -> "ProductCategoryOverrideWrite":
+        self.category_ids = list(dict.fromkeys([self.category_id, *self.category_ids]))
+        return self
+
+
+class ProductBulkCategoryWrite(BaseModel):
+    product_ids: list[UUID] = Field(min_length=1, max_length=200)
+    category_id: UUID
+    keep_secondary_categories: bool = True
+
+
+class ProductPdfOverrideWrite(BaseModel):
+    title: str = Field(default="Product catalogue PDF", min_length=1, max_length=180)
+    url: str = Field(min_length=8, max_length=1000, pattern=r"^https://")
+
+
+class CatalogueSummaryAdmin(BaseModel):
+    products_total: int
+    products_published: int
+    products_missing_pdf: int
+    products_category_overridden: int
+    products_pdf_overridden: int
+    categories_total: int
+    categories_published: int
+    categories_hidden: int
+    categories_empty: int
+    categories_missing_pdf: int
+    open_service_requests: int
+    open_quote_requests: int
+    open_contact_inquiries: int
+    customers_total: int
 
 
 class CategoryCatalogueWrite(BaseModel):
@@ -156,6 +203,8 @@ class ProductAdmin(BaseModel):
     source_reference: str | None
     wordpress_source_id: str | None
     wordpress_source_url: str | None
+    category_override: bool = False
+    documents_override: bool = False
     is_published: bool
     has_draft: bool
     updated_at: str
@@ -276,6 +325,7 @@ class ServiceRequestWrite(BaseModel):
     problem_category: Literal["alarm", "battery", "performance", "installation", "other"]
     description: str = Field(min_length=10, max_length=4000)
     service_location: str = Field(min_length=2, max_length=500)
+    attachments: list[HttpUrl] = Field(default_factory=list, max_length=5)
 
 
 class QuoteRequestWrite(BaseModel):

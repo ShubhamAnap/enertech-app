@@ -8,8 +8,8 @@ import pytest
 from fastapi import HTTPException
 from starlette.datastructures import UploadFile
 
-from app.api import media
-from app.core.auth import AdminIdentity
+from app.api import customer_requests, media
+from app.core.auth import AdminIdentity, Identity
 
 
 def test_media_upload_uses_async_storage_request(monkeypatch) -> None:
@@ -131,3 +131,40 @@ def test_media_upload_auto_creates_missing_public_bucket(monkeypatch) -> None:
         "POST:https://storage.example.test/storage/v1/bucket",
         AsyncStorageClient.calls[2],
     ]
+
+
+def test_customer_service_photo_upload_accepts_image_and_rejects_pdf(monkeypatch) -> None:
+    settings = SimpleNamespace(
+        supabase_url="https://storage.example.test",
+        supabase_service_role_key="test-server-key",
+        supabase_public_media_bucket="enertech-public",
+    )
+    monkeypatch.setattr(media, "get_settings", lambda: settings)
+    monkeypatch.setattr(customer_requests, "get_settings", lambda: settings)
+
+    class AsyncStorageClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def put(self, url, **kwargs):
+            assert "/service-requests/cust-1/" in url
+            assert kwargs["headers"]["Content-Type"] == "image/jpeg"
+            return httpx.Response(200)
+
+    monkeypatch.setattr(media.httpx, "AsyncClient", lambda **_kwargs: AsyncStorageClient())
+    session = Mock()
+    session.scalar.return_value = 0
+    identity = Identity(uid="cust-1", email="cust@example.test", name="Customer", claims={"email_verified": True})
+
+    jpg_upload = UploadFile(filename="fault.jpg", file=BytesIO(b"\xff\xd8\xff\xe0test-jpeg-bytes"))
+    result = asyncio.run(customer_requests.upload_service_request_photo(jpg_upload, identity=identity, session=session))
+    assert result.content_type == "image/jpeg"
+    assert result.path.startswith("service-requests/cust-1/")
+
+    pdf_upload = UploadFile(filename="doc.pdf", file=BytesIO(b"%PDF-1.7\nnot-an-image"))
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(customer_requests.upload_service_request_photo(pdf_upload, identity=identity, session=session))
+    assert error.value.status_code == 415

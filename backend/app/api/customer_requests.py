@@ -1,11 +1,13 @@
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.api.media import MediaAssetPublic, detect_media_payload, upload_media_bytes_to_storage
 from app.core.auth import AdminIdentity, Identity, get_current_identity, require_admin_roles
+from app.core.config import get_settings
 from app.db.session import get_session
 from app.models import AdminAccount, AuditEvent, CustomerRequest, ContactInquiry, CustomerProfile
 from app.schemas.cms import CustomerRequestAdmin, CustomerRequestPublic, CustomerRequestUpdate, QuoteRequestWrite, ServiceRequestWrite, ContactInquiryCreate, ContactInquiryAdmin, ContactInquiryUpdate
@@ -34,6 +36,8 @@ REQUEST_TRANSITIONS = {
 }
 CONTACT_INQUIRY_STATUSES = {"new", "in_progress", "waiting_for_customer", "resolved", "closed"}
 MAX_CUSTOMER_REQUESTS_PER_HOUR = 10
+MAX_SERVICE_PHOTO_BYTES = 10 * 1024 * 1024
+MAX_SERVICE_UPLOADS_PER_HOUR = 20
 
 
 def _require_verified_customer(identity: Identity) -> None:
@@ -82,6 +86,47 @@ def _create(kind: str, payload: dict[str, object], identity: Identity, session: 
     session.commit()
     session.refresh(record)
     return _public(record)
+
+
+@router.post("/requests/service/upload", response_model=MediaAssetPublic, status_code=status.HTTP_201_CREATED)
+async def upload_service_request_photo(
+    file: UploadFile = File(...),
+    identity: Identity = Depends(get_current_identity),
+    session: Session = Depends(get_session),
+) -> MediaAssetPublic:
+    _require_verified_customer(identity)
+    settings = get_settings()
+    if not settings.supabase_url or not settings.supabase_service_role_key or not settings.supabase_public_media_bucket:
+        raise HTTPException(status_code=503, detail="Photo uploads are unavailable until cloud storage is configured")
+    now = datetime.now(timezone.utc)
+    recent_uploads = session.scalar(
+        select(func.count())
+        .select_from(AuditEvent)
+        .where(
+            AuditEvent.actor_uid == identity.uid,
+            AuditEvent.action == "customer_media.uploaded",
+            AuditEvent.created_at >= now - timedelta(hours=1),
+        )
+    ) or 0
+    if recent_uploads >= MAX_SERVICE_UPLOADS_PER_HOUR:
+        raise HTTPException(status_code=429, detail="Too many photo uploads recently. Please wait before uploading more photos.")
+    payload = await file.read(MAX_SERVICE_PHOTO_BYTES + 1)
+    if not payload or len(payload) > MAX_SERVICE_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail="Choose a photo smaller than 10 MB")
+    detected = detect_media_payload(payload, allow_pdf=False)
+    if detected is None:
+        raise HTTPException(status_code=415, detail="Upload a PNG, JPEG, or WebP photo")
+    content_type, extension = detected
+    safe_uid = "".join(ch for ch in identity.uid if ch.isalnum() or ch in ("-", "_"))[:64] or "customer"
+    return await upload_media_bytes_to_storage(
+        payload=payload,
+        content_type=content_type,
+        extension=extension,
+        folder=f"service-requests/{safe_uid}",
+        actor_uid=identity.uid,
+        audit_action="customer_media.uploaded",
+        session=session,
+    )
 
 
 @router.post("/requests/service", status_code=status.HTTP_201_CREATED, response_model=CustomerRequestPublic)

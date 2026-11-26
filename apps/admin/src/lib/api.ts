@@ -1,9 +1,85 @@
 import type { User } from "firebase/auth";
 
-export type Category = { id: string; slug: string; name: string; description: string | null; sort_order: number; image_url: string | null; wordpress_source_id: string | null; is_published: boolean; has_draft: boolean; catalog_pdf_url?: string | null; catalog_pdf_title?: string | null; published_payload?: Record<string, unknown> | null };
+export type Category = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  sort_order: number;
+  image_url: string | null;
+  wordpress_source_id: string | null;
+  cms_locked?: boolean;
+  product_count?: number;
+  is_published: boolean;
+  has_draft: boolean;
+  catalog_pdf_url?: string | null;
+  catalog_pdf_title?: string | null;
+  published_payload?: Record<string, unknown> | null;
+};
+
 export type ProductDocument = { title: string; url: string };
-export type Product = { id: string; category_id: string; category_ids: string[]; slug: string; name: string; model_code: string | null; summary: string | null; description: string | null; applications: string[]; features: string[]; specifications: Record<string, unknown>; image_url: string | null; gallery_images: string[]; price_minor: number | null; currency_code: string; currency_minor_unit: number; stock_status: "instock" | "outofstock" | "onbackorder" | "unknown"; stock_quantity: number | null; documents: ProductDocument[]; catalog_pdf_url?: string | null; catalog_pdf_source?: "product" | "category" | "none"; wordpress_source_id: string | null; wordpress_source_url: string | null; source_reference: string | null; is_published: boolean; has_draft: boolean; updated_at: string; published_payload?: Record<string, unknown> | null };
-export type CategoryCatalogue = { id: string; category_key: string; category_id: string | null; wordpress_category_id: string | null; title: string; catalog_pdf_url: string; source: string; updated_at: string };
+
+export type Product = {
+  id: string;
+  category_id: string;
+  category_ids: string[];
+  slug: string;
+  name: string;
+  model_code: string | null;
+  summary: string | null;
+  description: string | null;
+  applications: string[];
+  features: string[];
+  specifications: Record<string, unknown>;
+  image_url: string | null;
+  gallery_images: string[];
+  price_minor: number | null;
+  currency_code: string;
+  currency_minor_unit: number;
+  stock_status: "instock" | "outofstock" | "onbackorder" | "unknown";
+  stock_quantity: number | null;
+  documents: ProductDocument[];
+  catalog_pdf_url?: string | null;
+  catalog_pdf_source?: "product" | "category" | "none";
+  wordpress_source_id: string | null;
+  wordpress_source_url: string | null;
+  category_override?: boolean;
+  documents_override?: boolean;
+  source_reference: string | null;
+  is_published: boolean;
+  has_draft: boolean;
+  updated_at: string;
+  published_payload?: Record<string, unknown> | null;
+};
+
+export type CatalogueSummary = {
+  products_total: number;
+  products_published: number;
+  products_missing_pdf: number;
+  products_category_overridden: number;
+  products_pdf_overridden: number;
+  categories_total: number;
+  categories_published: number;
+  categories_hidden: number;
+  categories_empty: number;
+  categories_missing_pdf: number;
+  open_service_requests: number;
+  open_quote_requests: number;
+  open_contact_inquiries: number;
+  customers_total: number;
+};
+
+export type CategoryCatalogue = {
+  id: string;
+  category_key: string;
+  category_id: string | null;
+  wordpress_category_id: string | null;
+  title: string;
+  catalog_pdf_url: string;
+  source: string;
+  updated_at: string;
+};
+
 export type ProductPage = { items: Product[]; total: number; limit: number; offset: number };
 export type ContentEnvelope = { key: string; draft_payload: Record<string, unknown>; published_payload: Record<string, unknown> | null; draft_revision: number; published_revision: number | null; updated_at: string | null };
 export type CustomerRequest = { id: string; kind: "service" | "quote"; status: string; payload: Record<string, unknown>; resolution_note: string | null; created_at: string; updated_at: string; customer_uid: string; customer_email: string; assigned_to: string | null; customer_name?: string | null; customer_phone?: string | null; customer_company?: string | null; customer_location?: string | null };

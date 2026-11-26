@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:image_picker/image_picker.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../data/customer_requests_repository.dart';
@@ -14,29 +15,123 @@ class ServiceRequestScreen extends StatefulWidget {
 }
 
 class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
+  static const int _maxPhotos = 4;
+
   final _formKey = GlobalKey<FormState>();
+  final _picker = ImagePicker();
   final _model = TextEditingController();
   final _serial = TextEditingController();
   final _description = TextEditingController();
   final _location = TextEditingController();
+  final List<XFile> _selectedPhotos = [];
+  final Map<String, String> _uploadedUrlsByPath = {};
+
   String? _issue;
   bool _working = false;
+  String? _progressLabel;
   String? _error;
+
+  Future<void> _pickFromGallery() async {
+    final remaining = _maxPhotos - _selectedPhotos.length;
+    if (remaining <= 0) {
+      setState(() => _error = 'You can attach up to $_maxPhotos photos.');
+      return;
+    }
+    try {
+      final picked = await _picker.pickMultiImage(
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 85,
+      );
+      if (!mounted || picked.isEmpty) return;
+      final existingPaths = _selectedPhotos.map((p) => p.path).toSet();
+      final additions = picked
+          .where((file) => !existingPaths.contains(file.path))
+          .take(remaining)
+          .toList(growable: false);
+      setState(() {
+        _error = picked.length > remaining
+            ? 'Attached $_maxPhotos photos maximum.'
+            : null;
+        _selectedPhotos.addAll(additions);
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Could not open photo gallery. Please try again.');
+      }
+    }
+  }
+
+  Future<void> _capturePhoto() async {
+    if (_selectedPhotos.length >= _maxPhotos) {
+      setState(() => _error = 'You can attach up to $_maxPhotos photos.');
+      return;
+    }
+    try {
+      final picked = await _picker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 85,
+      );
+      if (!mounted || picked == null) return;
+      setState(() {
+        _error = null;
+        _selectedPhotos.add(picked);
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'Camera unavailable. Try choosing a photo from gallery.');
+      }
+    }
+  }
+
+  void _removePhoto(int index) {
+    final removed = _selectedPhotos.removeAt(index);
+    _uploadedUrlsByPath.remove(removed.path);
+    setState(() => _error = null);
+  }
 
   Future<void> _submit() async {
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
     setState(() {
       _working = true;
+      _progressLabel = _selectedPhotos.isNotEmpty
+          ? 'Uploading photos…'
+          : 'Submitting request…';
       _error = null;
     });
+    final repo = CustomerRequestsRepository();
     try {
-      final result = await CustomerRequestsRepository().submitService(
+      final uploadedUrls = <String>[];
+      for (var i = 0; i < _selectedPhotos.length; i++) {
+        final photo = _selectedPhotos[i];
+        final cachedUrl = _uploadedUrlsByPath[photo.path];
+        if (cachedUrl != null) {
+          uploadedUrls.add(cachedUrl);
+          continue;
+        }
+        if (mounted) {
+          setState(
+            () => _progressLabel =
+                'Uploading photo ${i + 1} of ${_selectedPhotos.length}…',
+          );
+        }
+        final url = await repo.uploadServicePhoto(File(photo.path));
+        _uploadedUrlsByPath[photo.path] = url;
+        uploadedUrls.add(url);
+      }
+      if (mounted) {
+        setState(() => _progressLabel = 'Submitting request…');
+      }
+      final result = await repo.submitService(
         model: _model.text.trim(),
         serial: _serial.text.trim().isEmpty ? null : _serial.text.trim(),
         category: _issue!,
         description: _description.text.trim(),
         location: _location.text.trim(),
+        attachments: uploadedUrls,
       );
       if (!mounted) return;
       await showDialog<void>(
@@ -60,11 +155,17 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
     } catch (_) {
       if (mounted) {
         setState(
-          () => _error = 'Could not send the service request. Check your connection and try again.',
+          () => _error =
+              'Could not send the service request. Check your connection and try again.',
         );
       }
     } finally {
-      if (mounted) setState(() => _working = false);
+      if (mounted) {
+        setState(() {
+          _working = false;
+          _progressLabel = null;
+        });
+      }
     }
   }
 
@@ -209,7 +310,7 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Service location',
+                      'Service location & photos',
                       style: TextStyle(
                         color: AppColors.ink,
                         fontSize: 14,
@@ -229,19 +330,89 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
                         labelText: 'City, state, or PIN code *',
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    OutlinedButton.icon(
-                      onPressed: null,
-                      icon: const Icon(Icons.add_photo_alternate_outlined),
-                      label: const Text('Photo uploads not available'),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Equipment / fault photos (${_selectedPhotos.length}/$_maxPhotos optional)',
+                      style: const TextStyle(
+                        color: AppColors.ink,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: _working || _selectedPhotos.length >= _maxPhotos
+                              ? null
+                              : _pickFromGallery,
+                          icon: const Icon(Icons.photo_library_outlined, size: 18),
+                          label: const Text('Choose photos'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _working || _selectedPhotos.length >= _maxPhotos
+                              ? null
+                              : _capturePhoto,
+                          icon: const Icon(Icons.photo_camera_outlined, size: 18),
+                          label: const Text('Take photo'),
+                        ),
+                      ],
+                    ),
+                    if (_selectedPhotos.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: [
+                          for (var i = 0; i < _selectedPhotos.length; i++)
+                            Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Image.file(
+                                    File(_selectedPhotos[i].path),
+                                    width: 74,
+                                    height: 74,
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                                if (!_working)
+                                  Positioned(
+                                    top: -6,
+                                    right: -6,
+                                    child: GestureDetector(
+                                      onTap: () => _removePhoto(i),
+                                      child: Container(
+                                        width: 22,
+                                        height: 22,
+                                        decoration: const BoxDecoration(
+                                          color: AppColors.navy,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(
+                                          Icons.close_rounded,
+                                          size: 14,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 12),
             const NoticeCard(
-              message: 'Your request is sent to EnerTech when submitted. Photo uploads are not available yet. Do not include passwords, payment details, or unrelated personal information.',
+              message:
+                  'Your request and attached photos are sent directly to EnerTech support when submitted. Do not include passwords, payment details, or unrelated personal information.',
             ),
             if (_error != null) ...[
               const SizedBox(height: 10),
@@ -251,10 +422,17 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
             FilledButton(
               onPressed: _working ? null : _submit,
               child: _working
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                  ? Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 10),
+                        Text(_progressLabel ?? 'Submitting…'),
+                      ],
                     )
                   : const Text('Submit service request'),
             ),

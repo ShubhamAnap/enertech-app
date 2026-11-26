@@ -174,6 +174,7 @@ class ProductCategory {
     required this.name,
     this.description,
     this.imageUrl,
+    this.productCount = 0,
   });
 
   final String id;
@@ -181,6 +182,7 @@ class ProductCategory {
   final String name;
   final String? description;
   final String? imageUrl;
+  final int productCount;
 
   factory ProductCategory.fromJson(Map<String, dynamic> json) =>
       ProductCategory(
@@ -189,5 +191,6 @@ class ProductCategory {
         name: json['name'] as String,
         description: json['description'] as String?,
         imageUrl: json['image_url'] as String?,
+        productCount: (json['product_count'] as num?)?.toInt() ?? 0,
       );
 }

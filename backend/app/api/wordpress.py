@@ -947,6 +947,31 @@ def _optional_fetch_all(path: str, *, extra_params: dict[str, Any] | None = None
         return []
 
 
+_BROAD_UMBRELLA_CATEGORY_SLUGS = frozenset({
+    "uncategorized",
+    "power-products",
+    "solar-products",
+    "renewable-energy-solutions",
+    "balance-of-system",
+})
+
+
+def _pick_default_primary_category(
+    selected_categories: list[ProductCategory],
+    batch_freq_by_cat_id: dict[UUID, int],
+) -> ProductCategory:
+    """Prefer specific published collections over broad parent or uncategorized buckets."""
+    return min(
+        enumerate(selected_categories),
+        key=lambda pair: (
+            0 if pair[1].is_published else 1,
+            1 if pair[1].slug in _BROAD_UMBRELLA_CATEGORY_SLUGS else 0,
+            batch_freq_by_cat_id.get(pair[1].id, 10**6),
+            pair[0],
+        ),
+    )[1]
+
+
 def _slug_for_product(session: Session, slug: str, source_id: str, existing: Product | None) -> str:
     base = slug or f"wordpress-product-{source_id}"
     candidate = base[:180]
@@ -1040,9 +1065,17 @@ def sync_woocommerce_catalogue(
                     discovered.setdefault(str(category["id"]), category)
         source_categories = list(discovered.values())
 
+    wp_batch_freq_by_wp_id: dict[str, int] = {}
+    for src in source_products:
+        for cat_entry in src.get("categories", []) if isinstance(src.get("categories"), list) else []:
+            if isinstance(cat_entry, dict) and cat_entry.get("id") is not None:
+                cid_str = str(cat_entry["id"])
+                wp_batch_freq_by_wp_id[cid_str] = wp_batch_freq_by_wp_id.get(cid_str, 0) + 1
+
     categories_by_wp_id: dict[str, ProductCategory] = {}
     category_rows = 0
     category_catalogues_synced = 0
+    cms_preserved_categories = 0
     missing_cat_html_targets: list[tuple[ProductCategory, str, str]] = []
 
     for item in source_categories:
@@ -1051,6 +1084,11 @@ def sync_woocommerce_catalogue(
         if not wp_id or not name:
             continue
         slug = str(item.get("slug") or f"category-{wp_id}")[:120]
+        raw_wp_count = item.get("count")
+        effective_count = wp_batch_freq_by_wp_id.get(wp_id, 0) or (
+            int(raw_wp_count) if isinstance(raw_wp_count, int) else 0
+        )
+        should_publish_default = slug != "uncategorized" and effective_count > 0
         category = session.scalar(select(ProductCategory).where(ProductCategory.wordpress_source_id == wp_id))
         if category is None:
             slug_match = session.scalar(select(ProductCategory).where(ProductCategory.slug == slug))
@@ -1066,9 +1104,13 @@ def sync_woocommerce_catalogue(
             category = ProductCategory(
                 slug=slug, name=name, description=description,
                 sort_order=int(item.get("menu_order") or 0),
-                image_url=image, wordpress_source_id=wp_id, is_published=True,
+                image_url=image, wordpress_source_id=wp_id, is_published=should_publish_default,
             )
             session.add(category)
+        elif category.cms_locked:
+            category.wordpress_source_id = wp_id
+            category.image_url = category.image_url or image
+            cms_preserved_categories += 1
         else:
             slug_conflict = session.scalar(select(ProductCategory).where(ProductCategory.slug == slug))
             if slug_conflict is not None and slug_conflict.id != category.id:
@@ -1080,7 +1122,7 @@ def sync_woocommerce_catalogue(
             category.sort_order = int(item.get("menu_order") or 0)
             category.image_url = image or category.image_url
             category.wordpress_source_id = wp_id
-            category.is_published = True
+            category.is_published = should_publish_default
         session.flush()
         categories_by_wp_id[wp_id] = category
         category_rows += 1
@@ -1098,8 +1140,14 @@ def sync_woocommerce_catalogue(
                 cat_link = f"{site_origin}/product-category/{slug}/"
             missing_cat_html_targets.append((category, wp_id, cat_link))
 
+    batch_freq_by_cat_id = {
+        cat.id: wp_batch_freq_by_wp_id.get(wp_cid, 10**6)
+        for wp_cid, cat in categories_by_wp_id.items()
+    }
     created = updated = skipped = 0
     matched_by_rest = matched_by_media = matched_by_html = 0
+    cms_preserved_category_products = 0
+    cms_preserved_pdf_products = 0
     source_wp_ids = {str(row.get("id")) for row in source_products if row.get("id") is not None}
     doc_field_path = getattr(settings, "wordpress_source_documents_field", "")
     synced_products: list[Product] = []
@@ -1129,12 +1177,12 @@ def sync_woocommerce_catalogue(
                         slug="uncategorized",
                         name="Uncategorized",
                         description="Products without a WooCommerce category.",
-                        is_published=True,
+                        is_published=False,
                     )
                     session.add(fallback_category)
                     session.flush()
                 selected_categories = [fallback_category]
-        selected_category = selected_categories[0]
+        selected_category = _pick_default_primary_category(selected_categories, batch_freq_by_cat_id)
 
         store = store_by_id.get(wp_id, {})
         title = _plain(_field(source, settings.wordpress_source_title_field, source.get("name", "")), 220)
@@ -1208,8 +1256,11 @@ def sync_woocommerce_catalogue(
             created += 1
         else:
             updated += 1
-        product.category_id = selected_category.id
-        product.categories = selected_categories
+        if product.category_override:
+            cms_preserved_category_products += 1
+        else:
+            product.category_id = selected_category.id
+            product.categories = selected_categories
         product.slug = slug
         product.name = title
         product.model_code = sku or product.model_code
@@ -1227,7 +1278,10 @@ def sync_woocommerce_catalogue(
         product.stock_status = stock_status if stock_status != "unknown" else (product.stock_status or "unknown")
         if quantity is not None:
             product.stock_quantity = quantity
-        product.documents = documents
+        if product.documents_override:
+            cms_preserved_pdf_products += 1
+        else:
+            product.documents = documents
         product.source_reference = permalink or product.source_reference
         product.wordpress_source_url = permalink or product.wordpress_source_url
         product.content_verified_at = datetime.now(timezone.utc)
@@ -1236,7 +1290,7 @@ def sync_woocommerce_catalogue(
         product.draft_data = None
         synced_products.append(product)
 
-        if not documents and permalink:
+        if not product.documents_override and not documents and permalink:
             products_needing_html.append((product, permalink))
 
     # Optional scoped HTML fallback ONLY for items missing PDFs after REST & wp/v2/media.
@@ -1278,7 +1332,7 @@ def sync_woocommerce_catalogue(
                     prod_obj = prod_futures[fut]
                     html_body = fut.result()
                     html_docs = _extract_html_pdf_documents(html_body, site_origin=site_origin, default_title="Product brochure")
-                    if html_docs:
+                    if html_docs and not prod_obj.documents_override:
                         prod_obj.documents = html_docs
                         matched_by_html += 1
 
@@ -1310,6 +1364,9 @@ def sync_woocommerce_catalogue(
             "skipped": skipped,
             "withdrawn": withdrawn,
             "categories": category_rows,
+            "cms_preserved_categories": cms_preserved_categories,
+            "cms_preserved_category_products": cms_preserved_category_products,
+            "cms_preserved_pdf_products": cms_preserved_pdf_products,
             "category_catalogues_synced": category_catalogues_synced,
             "documents_linked": resolved_with_pdfs,
             "source_products": len(source_products),
@@ -1340,12 +1397,15 @@ def sync_woocommerce_catalogue(
         "skipped": skipped,
         "withdrawn": withdrawn,
         "categories": category_rows,
+        "cms_preserved_categories": cms_preserved_categories,
+        "cms_preserved_category_products": cms_preserved_category_products,
+        "cms_preserved_pdf_products": cms_preserved_pdf_products,
         "category_catalogues_synced": category_catalogues_synced,
         "documents_linked": resolved_with_pdfs,
         "message": (
             f"Synced {created + updated} WooCommerce products "
-            f"({resolved_with_pdfs} with PDFs linked; {len(source_media)} WP media PDFs scanned, "
-            f"{category_catalogues_synced} category catalogues mapped)."
+            f"({resolved_with_pdfs} with PDFs linked; {category_catalogues_synced} category catalogues mapped; "
+            f"preserved {cms_preserved_categories} CMS collections and {cms_preserved_category_products} product category overrides)."
         ),
     }
 

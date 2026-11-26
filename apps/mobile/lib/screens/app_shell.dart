@@ -19,19 +19,40 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _selectedIndex = 0;
+  int _catalogueRefreshVersion = 0;
   String? _selectedCategorySlug;
-  late final CatalogueRepository _catalogue = CatalogueRepository();
-  late final ProductSelectionStore _productSelection = ProductSelectionStore();
-  late final Future<List<ProductCategory>> _categories = _catalogue
-      .getCategories();
-  late final Future<Map<String, dynamic>> _appContent = AppContentRepository()
+  final CatalogueRepository _catalogue = CatalogueRepository();
+  final ProductSelectionStore _productSelection = ProductSelectionStore();
+  late Future<List<ProductCategory>> _categories = _catalogue.getCategories();
+  late Future<Map<String, dynamic>> _appContent = AppContentRepository()
       .loadPublished();
-  late final Future<ProductPageData> _homepageProducts = _loadHomepageProducts();
-  late final Future<List<Map<String, dynamic>>> _knowledge =
-      AppContentRepository().loadPublishedKnowledge();
+  late Future<ProductPageData> _homepageProducts = _loadHomepageProducts();
+  late Future<List<Map<String, dynamic>>> _knowledge = AppContentRepository()
+      .loadPublishedKnowledge();
 
-  Future<ProductPageData> _loadHomepageProducts() async {
-    final content = await _appContent;
+  Future<void> _refreshCatalogueAndHome() async {
+    final nextCategories = _catalogue.getCategories();
+    final nextContent = AppContentRepository().loadPublished();
+    final nextKnowledge = AppContentRepository().loadPublishedKnowledge();
+    setState(() {
+      _categories = nextCategories;
+      _appContent = nextContent;
+      _knowledge = nextKnowledge;
+      _homepageProducts = _loadHomepageProductsFrom(nextContent);
+      _catalogueRefreshVersion++;
+    });
+    try {
+      await Future.wait([nextCategories, nextContent, _homepageProducts]);
+    } catch (_) {}
+  }
+
+  Future<ProductPageData> _loadHomepageProducts() =>
+      _loadHomepageProductsFrom(_appContent);
+
+  Future<ProductPageData> _loadHomepageProductsFrom(
+    Future<Map<String, dynamic>> contentFuture,
+  ) async {
+    final content = await contentFuture;
     final home = content['home'];
     final selected = home is Map && home['featured_product_ids'] is List
         ? (home['featured_product_ids'] as List).map((value) => value.toString()).toList(growable: false)
@@ -52,6 +73,7 @@ class _AppShellState extends State<AppShell> {
           _selectedCategorySlug = slug;
           _selectedIndex = 1;
         }),
+        onRefresh: _refreshCatalogueAndHome,
         appContent: _appContent,
         catalogue: _catalogue,
         productSelection: _productSelection,
@@ -62,6 +84,7 @@ class _AppShellState extends State<AppShell> {
         repository: _catalogue,
         selection: _productSelection,
         selectedCategorySlug: _selectedCategorySlug,
+        refreshVersion: _catalogueRefreshVersion,
       ),
       RequestsScreen(
         onNavigate: (index) => setState(() => _selectedIndex = index),

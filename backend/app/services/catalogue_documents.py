@@ -2,10 +2,11 @@ from dataclasses import dataclass, field
 from typing import Iterable, Literal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, union
 from sqlalchemy.orm import Session
 
 from app.models import Product, ProductCategory, ProductCategoryCatalogue
+from app.models.catalogue import product_category_links
 
 
 def normalize_pdf_documents(raw_documents: object) -> list[dict[str, str]]:
@@ -120,16 +121,46 @@ def resolve_product_documents(
     return [], None, "none"
 
 
+def load_category_product_counts(
+    session: Session,
+    *,
+    published_only: bool = False,
+) -> dict[UUID, int]:
+    """Return distinct product counts per category across primary and link memberships."""
+    primary_query = select(
+        Product.category_id.label("category_id"),
+        Product.id.label("product_id"),
+    )
+    linked_query = select(
+        product_category_links.c.category_id.label("category_id"),
+        product_category_links.c.product_id.label("product_id"),
+    ).join(Product, Product.id == product_category_links.c.product_id)
+    if published_only:
+        primary_query = primary_query.where(Product.is_published.is_(True))
+        linked_query = linked_query.where(Product.is_published.is_(True))
+    memberships = union(primary_query, linked_query).subquery()
+    rows = session.execute(
+        select(memberships.c.category_id, func.count(memberships.c.product_id))
+        .group_by(memberships.c.category_id)
+    )
+    return {cat_id: int(count) for cat_id, count in rows if cat_id is not None}
+
+
 def resolve_product_documents_for_model(
     product: Product,
     lookup: CategoryCatalogueLookup | None,
 ) -> tuple[list[dict[str, str]], str | None, Literal["product", "category", "none"]]:
-    categories = list(product.categories)
-    if product.category is not None and all(c.id != product.category.id for c in categories):
+    # Prefer the primary category brochure before secondary memberships.
+    categories: list[ProductCategory] = []
+    if product.category is not None:
         categories.append(product.category)
+    for category in product.categories:
+        if product.category is None or category.id != product.category.id:
+            categories.append(category)
+    ordered_ids = list(dict.fromkeys([product.category_id, *product.category_ids]))
     return resolve_product_documents(
         raw_documents=product.documents,
-        category_ids=product.category_ids,
+        category_ids=ordered_ids,
         categories=categories,
         lookup=lookup,
     )
