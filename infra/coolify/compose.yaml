@@ -10,6 +10,7 @@ services:
       SUPABASE_DATABASE_URL: ${SUPABASE_DATABASE_URL:?set Supabase session-pooler URL with sslmode=require}
       SUPABASE_URL: ${SUPABASE_URL:?set Supabase project URL for CMS asset uploads}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?set server-only Supabase service role key}
+      SUPABASE_PUBLIC_MEDIA_BUCKET: ${SUPABASE_PUBLIC_MEDIA_BUCKET:-enertech-public}
       API_CORS_ORIGINS: ${API_CORS_ORIGINS:?set the public CMS origin}
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?set Firebase project ID}
       # Runtime-only secret: do not require or pass it to the image build.

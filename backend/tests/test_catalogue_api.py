@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
@@ -795,3 +796,95 @@ def test_wordpress_sync_html_fallback_and_telemetry(
     stabilizer_detail = client.get("/api/v1/catalogue/products/10kva-voltage-stabilizer").json()
     assert stabilizer_detail["catalog_pdf_url"] is None
     assert stabilizer_detail["documents"] == []
+
+
+def test_woocommerce_store_fallback_preserves_existing_descriptions_and_specs(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = SimpleNamespace(
+        app_env="production",
+        wordpress_api_base_url="https://enertechups.com/wp-json",
+        wordpress_products_path="wc/v3/products",
+        wordpress_categories_path="wc/v3/products/categories",
+        wordpress_store_products_path="wc/store/v1/products",
+        wordpress_documents_path="",
+        wordpress_wp_products_path="",
+        wordpress_wp_categories_path="",
+        wordpress_consumer_key="ck_test",
+        wordpress_consumer_secret="cs_test",
+        wordpress_source_title_field="name",
+        wordpress_source_slug_field="slug",
+        wordpress_source_summary_field="short_description",
+        wordpress_source_description_field="description",
+        wordpress_source_model_field="sku",
+        wordpress_source_image_field="images.0.src",
+        wordpress_source_specifications_field="attributes",
+        wordpress_source_applications_field="",
+        wordpress_source_features_field="",
+        wordpress_source_documents_field="",
+        wordpress_html_fallback_enabled=False,
+    )
+    use_store_fallback = False
+
+    def fake_fetch(path: str, **_kwargs):
+        if path == "wc/v3/products":
+            if use_store_fallback:
+                raise HTTPException(status_code=502, detail="WordPress returned HTTP 503 from wc/v3/products")
+            return [
+                {
+                    "id": 6001,
+                    "name": "30 KVA Industrial UPS",
+                    "slug": "30-kva-industrial-ups",
+                    "sku": "ET-IND-30",
+                    "short_description": "True online double conversion UPS",
+                    "description": '<p>Heavy duty UPS. <a href="https://enertechups.com/wp-content/uploads/30kva-ups.pdf">Brochure</a></p>',
+                    "permalink": "https://enertechups.com/shop/30-kva-industrial-ups/",
+                    "images": [{"src": "https://enertechups.com/wp-content/uploads/30kva.png"}],
+                    "categories": [{"id": 301, "name": "Industrial UPS"}],
+                    "attributes": [{"name": "Capacity", "options": ["30 kVA"]}],
+                    "price": "450000",
+                    "stock_status": "instock",
+                }
+            ]
+        if path == "wc/v3/products/categories":
+            return [{"id": 301, "name": "Industrial UPS", "slug": "industrial-ups", "description": ""}]
+        if path == "wc/store/v1/products":
+            return [
+                {
+                    "id": 6001,
+                    "name": "30 KVA Industrial UPS",
+                    "slug": "30-kva-industrial-ups",
+                    "sku": "",
+                    "short_description": "",
+                    "description": "",
+                    "permalink": "https://enertechups.com/shop/30-kva-industrial-ups/",
+                    "images": [],
+                    "categories": [{"id": 301, "name": "Industrial UPS", "slug": "industrial-ups"}],
+                    "prices": {"price": "45000000", "currency_code": "INR", "currency_minor_unit": 2},
+                    "is_in_stock": True,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(wordpress_api, "get_settings", lambda: settings)
+    monkeypatch.setattr(wordpress_api, "_fetch_all", fake_fetch)
+
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="fallback-admin", role="super_admin", is_active=True))
+        session.commit()
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "fallback-admin", "admin@example.test", "Admin", {"email_verified": True}
+    )
+
+    assert client.post("/api/v1/admin/integrations/wordpress/sync").status_code == 200
+    use_store_fallback = True
+    fallback_resp = client.post("/api/v1/admin/integrations/wordpress/sync")
+    assert fallback_resp.status_code == 200, fallback_resp.text
+    assert fallback_resp.json()["fallback_used"] == "wc/store/v1/products"
+
+    detail = client.get("/api/v1/catalogue/products/30-kva-industrial-ups").json()
+    assert detail["model_code"] == "ET-IND-30"
+    assert detail["summary"] == "True online double conversion UPS"
+    assert "Heavy duty UPS" in detail["description"]
+    assert detail["specifications"] == {"Capacity": ["30 kVA"]}
+    assert detail["catalog_pdf_url"] == "https://enertechups.com/wp-content/uploads/30kva-ups.pdf"

@@ -88,3 +88,46 @@ def test_media_upload_accepts_pdf_brochures(monkeypatch) -> None:
     result = asyncio.run(media.upload_media(upload, session=session, admin=admin))
     assert result.content_type == "application/pdf"
     assert str(result.url).endswith(".pdf")
+
+
+def test_media_upload_auto_creates_missing_public_bucket(monkeypatch) -> None:
+    settings = SimpleNamespace(
+        supabase_url="https://storage.example.test",
+        supabase_service_role_key="test-server-key",
+        supabase_public_media_bucket="enertech-public",
+    )
+    monkeypatch.setattr(media, "get_settings", lambda: settings)
+
+    class AsyncStorageClient:
+        calls: list[str] = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def put(self, url, **kwargs):
+            self.calls.append(f"PUT:{url}")
+            if len([c for c in self.calls if c.startswith("PUT:")]) == 1:
+                return httpx.Response(404, json={"statusCode": "404", "error": "Bucket not found", "message": "Bucket not found"})
+            return httpx.Response(200)
+
+        async def post(self, url, **kwargs):
+            self.calls.append(f"POST:{url}")
+            assert url == "https://storage.example.test/storage/v1/bucket"
+            assert kwargs["json"] == {"id": "enertech-public", "name": "enertech-public", "public": True}
+            return httpx.Response(200, json={"name": "enertech-public"})
+
+    monkeypatch.setattr(media.httpx, "AsyncClient", lambda **_kwargs: AsyncStorageClient())
+    session = Mock()
+    upload = UploadFile(filename="brochure.pdf", file=BytesIO(b"%PDF-1.7\ncontent"))
+    admin = AdminIdentity(uid="cms-admin", email="admin@example.test", name="CMS Admin", role="super_admin")
+
+    result = asyncio.run(media.upload_media(upload, session=session, admin=admin))
+    assert result.bucket == "enertech-public"
+    assert AsyncStorageClient.calls == [
+        AsyncStorageClient.calls[0],
+        "POST:https://storage.example.test/storage/v1/bucket",
+        AsyncStorageClient.calls[2],
+    ]

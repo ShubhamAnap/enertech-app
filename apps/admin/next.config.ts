@@ -4,6 +4,9 @@ const nextConfig: NextConfig = {
   output: "standalone",
   cacheComponents: true,
   partialPrefetching: true,
+  experimental: {
+    proxyTimeout: 120_000,
+  },
   turbopack: {
     rules: {
       "*.css": {

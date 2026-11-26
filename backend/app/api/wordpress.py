@@ -422,8 +422,20 @@ def _fetch_all(path: str, *, authenticated: bool, extra_params: dict[str, Any] |
         return run_pagination(default_page_size)
     except HTTPException as first_error:
         if first_error.status_code in (502, 504) and default_page_size > 10:
-            logger.warning("Retrying WordPress fetch path=%s with reduced per_page=10 after %s", path, first_error.detail)
-            return run_pagination(10)
+            smaller_size = 25 if default_page_size > 25 else 10
+            logger.warning(
+                "Retrying WordPress fetch path=%s with reduced per_page=%s after %s",
+                path,
+                smaller_size,
+                first_error.detail,
+            )
+            try:
+                return run_pagination(smaller_size)
+            except HTTPException as second_error:
+                if second_error.status_code in (502, 504) and smaller_size > 10:
+                    logger.warning("Retrying WordPress fetch path=%s with per_page=10", path)
+                    return run_pagination(10)
+                raise
         raise
 
 
@@ -517,6 +529,9 @@ def _fetch_pdf_media_resilient(path: str) -> tuple[list[dict[str, Any]], str]:
                 break
             batch = [item for item in payload if isinstance(item, dict)]
             if not batch:
+                if page == 1 and auth_mode == "public" and ((wp_user and wp_app_pw) or (ck and cs)):
+                    auth_mode = "query_params" if (ck and cs) else "basic_header"
+                    continue
                 break
             rows.extend(batch)
             try:
@@ -1009,21 +1024,13 @@ def sync_woocommerce_catalogue(
     if not source_products:
         raise HTTPException(status_code=409, detail="WooCommerce returned no products; sync made no changes")
 
-    store_products = (
-        _optional_fetch_all(store_path)
-        if rest_ready and not fallback_used and store_path
-        else source_products
-    )
+    store_products = source_products if (fallback_used or not rest_ready) else []
     store_by_id = {str(row.get("id")): row for row in store_products if row.get("id") is not None}
 
     docs_path = getattr(settings, "wordpress_documents_path", "")
     source_media, media_fetch_status = _fetch_pdf_media_resilient(docs_path)
-    wp_products_path = getattr(settings, "wordpress_wp_products_path", "")
-    wp_categories_path = getattr(settings, "wordpress_wp_categories_path", "")
-    wp_products = _optional_fetch_all(wp_products_path) if wp_products_path else []
-    wp_categories = _optional_fetch_all(wp_categories_path) if wp_categories_path else []
-    wp_products_by_id = {str(row.get("id")): row for row in wp_products if row.get("id") is not None}
-    wp_categories_by_id = {str(row.get("id")): row for row in wp_categories if row.get("id") is not None}
+    wp_products_by_id: dict[str, dict[str, Any]] = {}
+    wp_categories_by_id: dict[str, dict[str, Any]] = {}
 
     if not source_categories:
         discovered: dict[str, dict[str, Any]] = {}
@@ -1205,22 +1212,24 @@ def sync_woocommerce_catalogue(
         product.categories = selected_categories
         product.slug = slug
         product.name = title
-        product.model_code = sku
-        product.summary = summary
-        product.description = description
-        product.applications = applications
-        product.features = features
-        product.specifications = specifications
+        product.model_code = sku or product.model_code
+        product.summary = summary or product.summary
+        product.description = description or product.description
+        product.applications = applications or list(product.applications or [])
+        product.features = features or list(product.features or [])
+        product.specifications = specifications or (dict(product.specifications) if isinstance(product.specifications, dict) else {})
         product.image_url = image_url or product.image_url
-        product.gallery_images = gallery_images or product.gallery_images or []
-        product.price_minor = price_minor
-        product.currency_code = currency
-        product.currency_minor_unit = minor_digits
-        product.stock_status = stock_status
-        product.stock_quantity = quantity
+        product.gallery_images = gallery_images or list(product.gallery_images or [])
+        if price_minor is not None:
+            product.price_minor = price_minor
+            product.currency_code = currency
+            product.currency_minor_unit = minor_digits
+        product.stock_status = stock_status if stock_status != "unknown" else (product.stock_status or "unknown")
+        if quantity is not None:
+            product.stock_quantity = quantity
         product.documents = documents
-        product.source_reference = permalink
-        product.wordpress_source_url = permalink
+        product.source_reference = permalink or product.source_reference
+        product.wordpress_source_url = permalink or product.wordpress_source_url
         product.content_verified_at = datetime.now(timezone.utc)
         product.published_at = product.published_at or datetime.now(timezone.utc)
         product.is_published = True
