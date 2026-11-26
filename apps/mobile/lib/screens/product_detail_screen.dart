@@ -4,7 +4,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../data/catalogue_models.dart';
 import '../data/catalogue_repository.dart';
 import '../data/product_formatters.dart';
-import '../data/product_selection_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 import 'solution_finder_screen.dart';
@@ -13,13 +12,11 @@ class ProductDetailScreen extends StatefulWidget {
   const ProductDetailScreen({
     super.key,
     required this.repository,
-    required this.selection,
     required this.product,
     required this.category,
     this.categorySlug,
   });
   final CatalogueRepository repository;
-  final ProductSelectionStore selection;
   final ProductSummary product;
   final String category;
   final String? categorySlug;

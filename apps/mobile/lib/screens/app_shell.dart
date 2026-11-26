@@ -3,7 +3,6 @@ import 'package:material_ui/material_ui.dart';
 import '../data/catalogue_repository.dart';
 import '../data/app_content_repository.dart';
 import '../data/catalogue_models.dart';
-import '../data/product_selection_store.dart';
 import 'home_screen.dart';
 import 'products_screen.dart';
 import 'requests_screen.dart';
@@ -22,7 +21,6 @@ class _AppShellState extends State<AppShell> {
   int _catalogueRefreshVersion = 0;
   String? _selectedCategorySlug;
   final CatalogueRepository _catalogue = CatalogueRepository();
-  final ProductSelectionStore _productSelection = ProductSelectionStore();
   late Future<List<ProductCategory>> _categories = _catalogue.getCategories();
   late Future<Map<String, dynamic>> _appContent = AppContentRepository()
       .loadPublished();
@@ -80,13 +78,11 @@ class _AppShellState extends State<AppShell> {
         onRefresh: _refreshCatalogueAndHome,
         appContent: _appContent,
         catalogue: _catalogue,
-        productSelection: _productSelection,
         categories: _categories,
         products: _homepageProducts,
       ),
       ProductsScreen(
         repository: _catalogue,
-        selection: _productSelection,
         selectedCategorySlug: _selectedCategorySlug,
         refreshVersion: _catalogueRefreshVersion,
       ),

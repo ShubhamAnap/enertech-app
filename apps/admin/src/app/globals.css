@@ -157,6 +157,8 @@ h1,h2,h3 { font-family: Arial, Helvetica, sans-serif; letter-spacing: -.03em; }
 @media (min-width: 821px) {
   .mobile-menu { display: none !important; }
 }
+.form-control { display: flex; flex-direction: column; }
+
 @media (max-width: 540px) {
   .topbar { min-height: 3.5rem; padding: .5rem .85rem; }
   .content-wrap { padding: 1rem .85rem 2rem; }

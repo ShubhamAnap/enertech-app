@@ -1,11 +1,13 @@
+import 'dart:convert';
+
 import 'package:enertech_customer/data/catalogue_models.dart';
 import 'package:enertech_customer/data/catalogue_repository.dart';
-import 'package:enertech_customer/data/product_selection_store.dart';
 import 'package:enertech_customer/screens/products_screen.dart';
 import 'package:enertech_customer/screens/product_detail_screen.dart';
 import 'package:enertech_customer/theme/app_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class _FakeProductsRepository extends CatalogueRepository {
   _FakeProductsRepository() : super(baseUrl: '');
@@ -99,19 +101,20 @@ void main() {
   testWidgets('detail requests the browsed collection and displays both brochures', (tester) async {
     final repo = _FakeProductsRepository();
     await tester.pumpWidget(MaterialApp(theme: AppTheme.light, home: ProductDetailScreen(
-      repository: repo, selection: ProductSelectionStore(), category: 'Secondary collection',
+      repository: repo, category: 'Secondary collection',
       categorySlug: 'secondary', product: const ProductSummary(
         id: 'p-with-pdf', name: '100 KVA Industrial UPS', slug: 'ups', categoryId: 'c1',
       ),
     )));
     await tester.pumpAndSettle();
     expect(repo.detailCollection, 'secondary');
+    expect(find.textContaining('compare'), findsNothing);
     await tester.scrollUntilVisible(find.text('Primary collection brochure'), 280);
     expect(find.text('Secondary collection brochure'), findsOneWidget);
     expect(find.text('Primary collection brochure'), findsOneWidget);
   });
 
-  testWidgets('ProductsScreen displays Brochure PDF badge only for products with PDF', (
+  testWidgets('ProductsScreen displays Brochure PDF badge without Compare button', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -120,7 +123,6 @@ void main() {
         home: Scaffold(
           body: ProductsScreen(
             repository: _FakeProductsRepository(),
-            selection: ProductSelectionStore(),
           ),
         ),
       ),
@@ -129,5 +131,40 @@ void main() {
     expect(find.text('100 KVA Industrial UPS'), findsOneWidget);
     expect(find.text('10KVA Stabilizer'), findsOneWidget);
     expect(find.text('Brochure PDF'), findsOneWidget);
+    expect(find.textContaining('compare'), findsNothing);
   });
+
+  test(
+    'offline category filter maps the selected slug to cached category id',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        'enertech_cached_categories_v2': jsonEncode([
+          {'id': 'category-1', 'slug': 'inverters', 'name': 'Inverters'},
+          {'id': 'category-2', 'slug': 'batteries', 'name': 'Batteries'},
+        ]),
+        'enertech_cached_products_v2': jsonEncode({
+          'total': 2,
+          'items': [
+            {
+              'id': '1',
+              'slug': 'solar-inverter',
+              'name': 'Solar inverter',
+              'category_id': 'category-1',
+            },
+            {
+              'id': '2',
+              'slug': 'backup-battery',
+              'name': 'Backup battery',
+              'category_id': 'category-2',
+            },
+          ],
+        }),
+      });
+
+      final page = await CatalogueRepository(baseUrl: '')
+          .getProducts(category: 'inverters');
+      expect(page.total, 1);
+      expect(page.items.single.slug, 'solar-inverter');
+    },
+  );
 }

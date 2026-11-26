@@ -1,7 +1,6 @@
 import 'package:enertech_customer/app.dart';
 import 'package:enertech_customer/data/catalogue_models.dart';
 import 'package:enertech_customer/data/catalogue_repository.dart';
-import 'package:enertech_customer/data/product_selection_store.dart';
 import 'package:enertech_customer/screens/home_screen.dart';
 import 'package:enertech_customer/theme/app_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -43,7 +42,6 @@ void main() {
         },
       }),
       catalogue: CatalogueRepository(baseUrl: ''),
-      productSelection: ProductSelectionStore(),
       categories: Future.value(const <ProductCategory>[]),
       products: Future.value(const ProductPageData(items: [], total: 0)),
     );

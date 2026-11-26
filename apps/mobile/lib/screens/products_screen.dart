@@ -5,7 +5,6 @@ import 'package:material_ui/material_ui.dart';
 import '../data/catalogue_models.dart';
 import '../data/catalogue_repository.dart';
 import '../data/product_formatters.dart';
-import '../data/product_selection_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 import 'product_detail_screen.dart';
@@ -14,12 +13,10 @@ class ProductsScreen extends StatefulWidget {
   const ProductsScreen({
     super.key,
     required this.repository,
-    required this.selection,
     this.selectedCategorySlug,
     this.refreshVersion = 0,
   });
   final CatalogueRepository repository;
-  final ProductSelectionStore selection;
   final String? selectedCategorySlug;
   final int refreshVersion;
 
@@ -259,7 +256,6 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       builder: (_) => ProductDetailScreen(
                         categorySlug: _selectedCategory,
                         repository: widget.repository,
-                        selection: widget.selection,
                         product: _products[index],
                         category:
                             _categories

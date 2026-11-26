@@ -149,9 +149,13 @@ export default function AdminShell({ user, role }: { user: User; role: string })
   const [adminForm, setAdminForm] = useState({ firebase_uid: "", email: "", display_name: "", role: "content_editor" as AdminAccount["role"], is_active: true });
   const [editingAdminUid, setEditingAdminUid] = useState<string | null>(null);
   const [knowledgeForm, setKnowledgeForm] = useState<typeof emptyKnowledge | KnowledgeArticle>(emptyKnowledge);
+  const [knowledgeVideoInput, setKnowledgeVideoInput] = useState("");
+  const [knowledgePreview, setKnowledgePreview] = useState(false);
+  const [knowledgeSlugTouched, setKnowledgeSlugTouched] = useState(false);
   const [editingKnowledge, setEditingKnowledge] = useState<string | null>(null);
   const [showKnowledgeForm, setShowKnowledgeForm] = useState(false);
   const [knowledgeMediaUploading, setKnowledgeMediaUploading] = useState(false);
+  const knowledgeAnswerRef = useRef<HTMLTextAreaElement | null>(null);
   const [wpPreview, setWpPreview] = useState<Array<Record<string, unknown>>>([]);
   const [wpStatus, setWpStatus] = useState<string>("");
   const [lastWpSync, setLastWpSync] = useState<WordPressSyncSummary | null>(null);
@@ -607,12 +611,65 @@ export default function AdminShell({ user, role }: { user: User; role: string })
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  async function submitKnowledge(event: FormEvent) {
-    event.preventDefault(); setError(""); setNotice("");
+  async function saveKnowledgeArticle(publishAfterSave: boolean) {
+    setError(""); setNotice("");
+    const sourceRef = knowledgeForm.source_reference?.trim() || null;
+    if (publishAfterSave && !sourceRef) {
+      setError("Add an approved source reference before publishing this answer.");
+      return;
+    }
     try {
-      const saved = await api<KnowledgeArticle>(user, editingKnowledge ? `/admin/knowledge/${editingKnowledge}` : "/admin/knowledge", { method: editingKnowledge ? "PATCH" : "POST", body: JSON.stringify(knowledgeForm) });
-      setNotice("Support content draft saved."); setKnowledgeForm(saved); setEditingKnowledge(saved.id); await loadKnowledge();
+      const payload = {
+        slug: knowledgeForm.slug.trim(),
+        title: knowledgeForm.title.trim(),
+        category: knowledgeForm.category.trim(),
+        answer: knowledgeForm.answer,
+        image_urls: knowledgeForm.image_urls ?? [],
+        video_urls: knowledgeForm.video_urls ?? [],
+        source_reference: sourceRef,
+        sort_order: Number(knowledgeForm.sort_order) || 0,
+      };
+      let saved = await api<KnowledgeArticle>(user, editingKnowledge ? `/admin/knowledge/${editingKnowledge}` : "/admin/knowledge", { method: editingKnowledge ? "PATCH" : "POST", body: JSON.stringify(payload) });
+      if (publishAfterSave) {
+        saved = await api<KnowledgeArticle>(user, `/admin/knowledge/${saved.id}/publish`, { method: "POST" });
+        setNotice("FAQ saved and published to the customer app.");
+        setShowKnowledgeForm(false);
+      } else {
+        setNotice("Support content draft saved.");
+        setKnowledgeForm(saved);
+        setEditingKnowledge(saved.id);
+        setKnowledgeSlugTouched(true);
+      }
+      await loadKnowledge();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save support content."); }
+  }
+
+  async function submitKnowledge(event: FormEvent) {
+    event.preventDefault();
+    await saveKnowledgeArticle(false);
+  }
+
+  function insertKnowledgeSnippet(snippet: string) {
+    const el = knowledgeAnswerRef.current;
+    const current = knowledgeForm.answer ?? "";
+    if (!el) {
+      setKnowledgeForm({ ...knowledgeForm, answer: current ? `${current}\n${snippet}` : snippet });
+      return;
+    }
+    const start = el.selectionStart ?? current.length;
+    const end = el.selectionEnd ?? current.length;
+    const selected = current.slice(start, end);
+    let inserted = snippet;
+    if (snippet === "**bold**" && selected) inserted = `**${selected}**`;
+    else if (snippet === "# " && selected) inserted = `# ${selected}`;
+    else if (snippet === "- " && selected) inserted = selected.split("\n").map((line) => (line.trim() ? `- ${line}` : line)).join("\n");
+    const next = `${current.slice(0, start)}${inserted}${current.slice(end)}`;
+    setKnowledgeForm({ ...knowledgeForm, answer: next });
+    window.requestAnimationFrame(() => {
+      el.focus();
+      const cursor = start + inserted.length;
+      el.setSelectionRange(cursor, cursor);
+    });
   }
 
   async function uploadKnowledgeFiles(files: FileList | null, kind: "image_urls" | "video_urls") {
@@ -624,7 +681,11 @@ export default function AdminShell({ user, role }: { user: User; role: string })
         const result = await uploadMedia(user, file);
         urls.push(result.url);
       }
-      setKnowledgeForm((current) => ({ ...current, [kind]: [...current[kind], ...urls] }));
+      setKnowledgeForm((current) => {
+        const existing = current[kind] ?? [];
+        const updated = [...existing, ...urls.filter((url) => !existing.includes(url))];
+        return { ...current, [kind]: updated };
+      });
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not upload FAQ media."); }
     finally { setKnowledgeMediaUploading(false); }
   }
@@ -2085,7 +2146,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                     <h1>FAQs & Knowledge</h1>
                     <p>Source-referenced answers shown in the customer app after publication.</p>
                   </div>
-                  <button className="btn btn-primary" onClick={() => { setKnowledgeForm(emptyKnowledge); setEditingKnowledge(null); setShowKnowledgeForm(true); }}>+ Add answer</button>
+                  <button className="btn btn-primary" onClick={() => { setKnowledgeForm(emptyKnowledge); setKnowledgeVideoInput(""); setKnowledgePreview(false); setKnowledgeSlugTouched(false); setEditingKnowledge(null); setShowKnowledgeForm(true); }}>+ Add answer</button>
                 </div>
                 <article className="card panel">
                   <div className="table-toolbar">
@@ -2112,7 +2173,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                             <td><span className={`badge ${article.is_published ? "badge-success" : "badge-ghost"}`}>{article.is_published ? "Published" : "Draft"}</span></td>
                             <td>
                               <div className="flex gap-1">
-                                <button className="btn btn-ghost btn-xs" onClick={() => { setKnowledgeForm(article); setEditingKnowledge(article.id); setShowKnowledgeForm(true); }}>Edit</button>
+                                <button className="btn btn-ghost btn-xs" onClick={() => { const imgs = article.image_urls ?? []; const vids = article.video_urls ?? []; setKnowledgeForm({ ...article, image_urls: imgs, video_urls: vids }); setKnowledgeVideoInput(""); setKnowledgePreview(false); setKnowledgeSlugTouched(true); setEditingKnowledge(article.id); setShowKnowledgeForm(true); }}>Edit</button>
                                 {(!article.is_published || article.has_draft) && <button className="btn btn-primary btn-xs" onClick={async () => { setError(""); try { await api(user, `/admin/knowledge/${article.id}/publish`, { method: "POST" }); setNotice("FAQ published to the app."); await loadKnowledge(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not publish FAQ."); } }}>Publish</button>}
                                 {article.is_published && (role === "admin" || role === "super_admin") && <button className="btn btn-ghost btn-xs text-error" onClick={() => void unpublish(`/admin/knowledge/${article.id}/unpublish`)}>Unpublish</button>}
                               </div>
@@ -2413,18 +2474,186 @@ export default function AdminShell({ user, role }: { user: User; role: string })
       {/* EDIT/CREATE KNOWLEDGE MODAL */}
       {showKnowledgeForm && (
         <dialog open className="modal modal-open">
-          <div className="modal-box max-h-[90dvh] overflow-y-auto max-w-2xl">
-            <h2 className="text-xl font-bold">{editingKnowledge ? "Edit Support Answer" : "New Support Answer"}</h2>
-            <form onSubmit={submitKnowledge} className="grid gap-3 sm:grid-cols-2">
-              <label className="form-control gap-1"><span className="label-text">Question Title</span><input className="input input-bordered" required minLength={3} value={knowledgeForm.title} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, title: e.target.value })} /></label>
-              <label className="form-control gap-1"><span className="label-text">URL Slug</span><input className="input input-bordered" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" value={knowledgeForm.slug} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, slug: e.target.value })} /></label>
-              <label className="form-control gap-1"><span className="label-text">Category</span><input className="input input-bordered" required minLength={2} maxLength={100} value={knowledgeForm.category} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, category: e.target.value })} /></label>
-              <label className="form-control gap-1"><span className="label-text">Sort order</span><input className="input input-bordered" type="number" min="0" max="10000" value={knowledgeForm.sort_order} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, sort_order: Number(e.target.value) })} /></label>
-              <label className="form-control gap-1 sm:col-span-2"><span className="label-text">Formatted answer</span><textarea className="textarea textarea-bordered min-h-36" required minLength={10} value={knowledgeForm.answer} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, answer: e.target.value })} /><span className="label-text-alt">Use # Heading, - bullet, and **bold** in the answer.</span></label>
-              <label className="form-control gap-1 sm:col-span-2"><span className="label-text">Images</span><textarea className="textarea textarea-bordered min-h-20" placeholder="One HTTPS image URL per line" value={knowledgeForm.image_urls.join("\n")} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, image_urls: e.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} /><input className="file-input file-input-bordered file-input-sm w-full" type="file" accept="image/png,image/jpeg,image/webp" multiple disabled={knowledgeMediaUploading} aria-label="Upload FAQ images" onChange={(e) => { void uploadKnowledgeFiles(e.target.files, "image_urls"); e.target.value = ""; }} /></label>
-              <label className="form-control gap-1 sm:col-span-2"><span className="label-text">Video links and direct videos</span><textarea className="textarea textarea-bordered min-h-20" placeholder="One HTTPS video URL per line, including YouTube links or MP4/WebM files" value={knowledgeForm.video_urls.join("\n")} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, video_urls: e.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} /><input className="file-input file-input-bordered file-input-sm w-full" type="file" accept="video/mp4,video/webm" disabled={knowledgeMediaUploading} aria-label="Upload FAQ video" onChange={(e) => { void uploadKnowledgeFiles(e.target.files, "video_urls"); e.target.value = ""; }} /><span className="label-text-alt">Uploaded MP4/WebM videos play in the app. Other video links open in the video provider.</span></label>
-              <label className="form-control gap-1 sm:col-span-2"><span className="label-text">Approved source reference</span><input className="input input-bordered" required maxLength={1000} placeholder="Document URL, manual section, or approval reference" value={knowledgeForm.source_reference ?? ""} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, source_reference: e.target.value })} /><span className="label-text-alt">A source reference is required to publish this answer.</span></label>
-              <div className="modal-action sm:col-span-2"><button type="button" className="btn btn-ghost" onClick={() => setShowKnowledgeForm(false)}>Close</button><button className="btn btn-primary" disabled={knowledgeMediaUploading}>Save Answer</button></div>
+          <div className="modal-box max-h-[90dvh] w-11/12 max-w-3xl overflow-y-auto">
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <div>
+                <h2 className="text-xl font-bold">{editingKnowledge ? "Edit Support FAQ" : "New Support FAQ"}</h2>
+                <p className="text-xs text-base-content/60">Write a formatted answer with links, photos, and videos, then publish to Support.</p>
+              </div>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowKnowledgeForm(false)}>✕</button>
+            </div>
+            <form onSubmit={submitKnowledge} className="space-y-4">
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs font-semibold text-base-content/80">Question *</span>
+                <input
+                  className="input input-bordered w-full"
+                  required
+                  minLength={3}
+                  placeholder="e.g. How to check UPS battery health and maintenance?"
+                  value={knowledgeForm.title}
+                  onChange={(e) => {
+                    const nextTitle = e.target.value;
+                    const autoSlug = nextTitle.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 140);
+                    setKnowledgeForm({
+                      ...knowledgeForm,
+                      title: nextTitle,
+                      slug: !editingKnowledge && !knowledgeSlugTouched ? autoSlug : knowledgeForm.slug,
+                    });
+                  }}
+                />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-base-content/80">Category *</span>
+                  <input className="input input-bordered input-sm w-full" required minLength={2} maxLength={100} value={knowledgeForm.category} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, category: e.target.value })} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-base-content/80">URL Slug *</span>
+                  <input className="input input-bordered input-sm w-full font-mono text-xs" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" value={knowledgeForm.slug} onChange={(e) => { setKnowledgeSlugTouched(true); setKnowledgeForm({ ...knowledgeForm, slug: e.target.value }); }} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-base-content/80">Display Order</span>
+                  <input className="input input-bordered input-sm w-full" type="number" min="0" max="10000" value={knowledgeForm.sort_order} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, sort_order: Number(e.target.value) })} />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-base-300 bg-base-100">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-base-200 bg-base-200/40 px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-1">
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={() => insertKnowledgeSnippet("\n# Heading\n")}>Heading</button>
+                    <button type="button" className="btn btn-ghost btn-xs font-bold" onClick={() => insertKnowledgeSnippet("**bold**")}>Bold</button>
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={() => insertKnowledgeSnippet("\n- Step or point")}>• Bullet</button>
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={() => insertKnowledgeSnippet("\nhttps://")}>+ Link URL</button>
+                    <label className="btn btn-ghost btn-xs cursor-pointer">
+                      + Upload Image
+                      <input className="hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple disabled={knowledgeMediaUploading} aria-label="Upload FAQ images" onChange={(e) => { void uploadKnowledgeFiles(e.target.files, "image_urls"); e.target.value = ""; }} />
+                    </label>
+                    <label className="btn btn-ghost btn-xs cursor-pointer">
+                      + Upload Video
+                      <input className="hidden" type="file" accept="video/mp4,video/webm" disabled={knowledgeMediaUploading} aria-label="Upload FAQ video" onChange={(e) => { void uploadKnowledgeFiles(e.target.files, "video_urls"); e.target.value = ""; }} />
+                    </label>
+                  </div>
+                  <div className="join">
+                    <button type="button" className={`btn btn-xs join-item ${!knowledgePreview ? "btn-active btn-neutral" : "btn-ghost"}`} onClick={() => setKnowledgePreview(false)}>Write</button>
+                    <button type="button" className={`btn btn-xs join-item ${knowledgePreview ? "btn-active btn-neutral" : "btn-ghost"}`} onClick={() => setKnowledgePreview(true)}>Preview</button>
+                  </div>
+                </div>
+
+                {!knowledgePreview ? (
+                  <textarea
+                    ref={knowledgeAnswerRef}
+                    className="textarea w-full min-h-48 rounded-none border-0 text-sm leading-relaxed focus:outline-none"
+                    required
+                    minLength={10}
+                    placeholder={"Write or paste your answer here...\n\nSupports:\n# Section heading\n- Bullet points\n**Bold text**\nhttps://enertechups.com/... (clickable links)"}
+                    value={knowledgeForm.answer}
+                    onChange={(e) => setKnowledgeForm({ ...knowledgeForm, answer: e.target.value })}
+                  />
+                ) : (
+                  <div className="min-h-48 space-y-2 p-4 text-sm leading-relaxed">
+                    {(knowledgeForm.answer || "").split("\n").map((line, idx) => {
+                      const trimmed = line.trim();
+                      if (!trimmed) return <div key={idx} className="h-2" />;
+                      if (trimmed.startsWith("# ")) return <h3 key={idx} className="text-base font-bold">{trimmed.slice(2)}</h3>;
+                      if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) return <p key={idx} className="pl-3">• {trimmed.slice(2)}</p>;
+                      return <p key={idx}>{trimmed}</p>;
+                    })}
+                    {(knowledgeForm.image_urls?.length ?? 0) > 0 && (
+                      <div className="grid grid-cols-2 gap-2 pt-2 sm:grid-cols-3">
+                        {(knowledgeForm.image_urls ?? []).map((url) => (
+                          <img key={url} src={url} alt="FAQ attachment" className="h-28 w-full rounded-lg border border-base-200 object-cover" />
+                        ))}
+                      </div>
+                    )}
+                    {(knowledgeForm.video_urls?.length ?? 0) > 0 && (
+                      <div className="space-y-1 pt-2 text-xs text-primary">
+                        {(knowledgeForm.video_urls ?? []).map((url) => (
+                          <p key={url}>▶ {url}</p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="space-y-3 border-t border-base-200 bg-base-200/25 p-3">
+                  {knowledgeMediaUploading && <p className="text-xs text-primary">Uploading media to cloud storage…</p>}
+                  {(knowledgeForm.image_urls?.length ?? 0) > 0 && (
+                    <div>
+                      <p className="mb-1.5 text-xs font-semibold text-base-content/70">Attached Images ({knowledgeForm.image_urls.length})</p>
+                      <div className="flex flex-wrap gap-2">
+                        {(knowledgeForm.image_urls ?? []).map((url, index) => (
+                          <div key={`${url}-${index}`} className="flex items-center gap-1.5 rounded-lg border border-base-300 bg-base-100 p-1 pr-2 text-xs">
+                            <img src={url} alt="" className="h-8 w-8 rounded object-cover" />
+                            <a href={url} target="_blank" rel="noreferrer" className="max-w-36 truncate link link-hover">{url.split("/").pop() || "Image"}</a>
+                            <button type="button" className="btn btn-ghost btn-xs text-error" onClick={() => setKnowledgeForm({ ...knowledgeForm, image_urls: knowledgeForm.image_urls.filter((_, i) => i !== index) })}>✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs font-semibold text-base-content/70">Add Video Link (YouTube, Vimeo, or direct MP4/WebM URL)</span>
+                    <div className="flex gap-2">
+                      <input
+                        className="input input-bordered input-sm flex-1"
+                        type="url"
+                        placeholder="https://youtube.com/... or https://.../video.mp4"
+                        value={knowledgeVideoInput}
+                        onChange={(e) => setKnowledgeVideoInput(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-sm"
+                        onClick={() => {
+                          const candidate = knowledgeVideoInput.trim();
+                          if (!candidate.startsWith("https://")) {
+                            setError("Video links must start with https://");
+                            return;
+                          }
+                          const existing = knowledgeForm.video_urls ?? [];
+                          if (!existing.includes(candidate)) {
+                            setKnowledgeForm({ ...knowledgeForm, video_urls: [...existing, candidate] });
+                          }
+                          setKnowledgeVideoInput("");
+                        }}
+                      >
+                        Add Video
+                      </button>
+                    </div>
+                    {(knowledgeForm.video_urls?.length ?? 0) > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {(knowledgeForm.video_urls ?? []).map((url, index) => (
+                          <div key={`${url}-${index}`} className="badge badge-outline gap-1.5 py-3 text-xs">
+                            <a href={url} target="_blank" rel="noreferrer" className="max-w-52 truncate link link-hover">{url}</a>
+                            <button type="button" className="text-error font-bold" onClick={() => setKnowledgeForm({ ...knowledgeForm, video_urls: knowledgeForm.video_urls.filter((_, i) => i !== index) })}>✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs font-semibold text-base-content/80">Approved Source Reference</span>
+                <input
+                  className="input input-bordered input-sm w-full"
+                  maxLength={1000}
+                  placeholder="Document URL, manual section, or internal approval note (required before Publish)"
+                  value={knowledgeForm.source_reference ?? ""}
+                  onChange={(e) => setKnowledgeForm({ ...knowledgeForm, source_reference: e.target.value })}
+                />
+              </div>
+
+              <div className="modal-action flex-wrap justify-between gap-2 pt-2">
+                <button type="button" className="btn btn-ghost" onClick={() => setShowKnowledgeForm(false)}>Cancel</button>
+                <div className="flex flex-wrap gap-2">
+                  <button type="submit" className="btn btn-outline" disabled={knowledgeMediaUploading}>Save Draft</button>
+                  <button type="button" className="btn btn-primary" disabled={knowledgeMediaUploading} onClick={() => void saveKnowledgeArticle(true)}>Save &amp; Publish</button>
+                </div>
+              </div>
             </form>
           </div>
           <form method="dialog" className="modal-backdrop"><button onClick={() => setShowKnowledgeForm(false)}>close</button></form>

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../data/customer_requests_repository.dart';
@@ -105,7 +106,9 @@ class _RequestFormState extends State<_RequestForm> {
   @override
   void initState() {
     super.initState();
-    _email.text = FirebaseAuth.instance.currentUser?.email ?? '';
+    if (Firebase.apps.isNotEmpty) {
+      _email.text = FirebaseAuth.instance.currentUser?.email ?? '';
+    }
   }
 
   @override

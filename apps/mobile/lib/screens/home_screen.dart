@@ -2,7 +2,6 @@ import 'package:material_ui/material_ui.dart';
 
 import '../data/catalogue_models.dart';
 import '../data/catalogue_repository.dart';
-import '../data/product_selection_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 import 'product_detail_screen.dart';
@@ -17,7 +16,6 @@ class HomeScreen extends StatelessWidget {
     required this.catalogue,
     required this.categories,
     required this.products,
-    required this.productSelection,
     this.onRefresh,
   });
   final ValueChanged<int> onNavigate;
@@ -27,7 +25,6 @@ class HomeScreen extends StatelessWidget {
   final CatalogueRepository catalogue;
   final Future<List<ProductCategory>> categories;
   final Future<ProductPageData> products;
-  final ProductSelectionStore productSelection;
 
   void _openSolutionFinder(BuildContext context) {
     Navigator.of(context).push(
@@ -561,7 +558,6 @@ class HomeScreen extends StatelessWidget {
                           MaterialPageRoute<void>(
                             builder: (_) => ProductDetailScreen(
                               repository: catalogue,
-                              selection: productSelection,
                               product: product,
                               category: collection(product)?.name ?? 'Product',
                               categorySlug: collection(product)?.slug,
