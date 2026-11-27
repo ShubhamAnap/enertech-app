@@ -1,4 +1,5 @@
 import 'package:material_ui/material_ui.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../data/legal_repository.dart';
@@ -35,7 +36,19 @@ class _LegalPageScreenState extends State<LegalPageScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(widget.title)),
+    appBar: AppBar(
+      title: Text(widget.title),
+      actions: [
+        IconButton(
+          tooltip: 'Open in browser',
+          icon: const Icon(Icons.open_in_new_rounded),
+          onPressed: () => launchUrl(
+            LegalRepository.pageUrl(widget.page),
+            mode: LaunchMode.externalApplication,
+          ),
+        ),
+      ],
+    ),
     body: Stack(children: [
       if (!_failed) WebViewWidget(controller: _controller),
       if (_loading) const Center(child: CircularProgressIndicator()),

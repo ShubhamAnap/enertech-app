@@ -470,8 +470,20 @@ class _AccountScreenState extends State<AccountScreen> {
 
             const Text('LEGAL', style: TextStyle(color: AppColors.muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
             const SizedBox(height: 8),
-            _AccountAction(icon: Icons.privacy_tip_outlined, title: 'Privacy Policy', detail: 'View the current policy', onTap: () => openLegalPage(context, 'privacy-policy')),
-            _AccountAction(icon: Icons.description_outlined, title: 'Terms of Use', detail: 'View the current terms', onTap: () => openLegalPage(context, 'terms')),
+            _AccountAction(
+              icon: Icons.privacy_tip_outlined,
+              title: 'Privacy Policy',
+              detail: 'View the current policy',
+              trailingIcon: Icons.chevron_right_rounded,
+              onTap: () => openLegalPage(context, 'privacy-policy'),
+            ),
+            _AccountAction(
+              icon: Icons.description_outlined,
+              title: 'Terms of Use',
+              detail: 'View the current terms',
+              trailingIcon: Icons.chevron_right_rounded,
+              onTap: () => openLegalPage(context, 'terms'),
+            ),
             const SizedBox(height: 20),
 
             // Edit Profile Button
@@ -529,12 +541,14 @@ class _AccountAction extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.detail,
+    this.trailingIcon = Icons.edit_outlined,
     this.onTap,
   });
 
   final IconData icon;
   final String title;
   final String detail;
+  final IconData trailingIcon;
   final VoidCallback? onTap;
 
   @override
@@ -568,7 +582,7 @@ class _AccountAction extends StatelessWidget {
           ),
         ),
         trailing: onTap != null
-            ? const Icon(Icons.edit_outlined, size: 18, color: AppColors.muted)
+            ? Icon(trailingIcon, size: 18, color: AppColors.muted)
             : null,
         onTap: onTap,
       ),

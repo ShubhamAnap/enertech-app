@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -737,7 +738,11 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    if (!_acceptedLegal || _legalVersions == null) {
+    if (_legalVersions == null) {
+      setState(() => _error = 'Privacy Policy and Terms are unavailable. Tap Retry to load them.');
+      return;
+    }
+    if (!_acceptedLegal) {
       setState(() => _error = 'Read and accept the Privacy Policy and Terms of Use to continue.');
       return;
     }
@@ -935,27 +940,24 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
                   if (_error != null)
                     _InlineMessage(text: _error!, error: true),
 
-                  const SizedBox(height: 12),
-                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Checkbox(
-                      value: _acceptedLegal,
-                      onChanged: _legalVersions == null || _busy ? null : (value) => setState(() => _acceptedLegal = value ?? false),
-                      semanticLabel: 'I agree to the Privacy Policy and Terms of Use',
-                    ),
-                    Expanded(child: Padding(padding: const EdgeInsets.only(top: 4), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const Text('I have read and agree to the', style: TextStyle(fontSize: 13, color: AppColors.ink)),
-                      Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
-                        TextButton(onPressed: () => openLegalPage(context, 'privacy-policy'), child: const Text('Privacy Policy')),
-                        const Text('and', style: TextStyle(fontSize: 13)),
-                        TextButton(onPressed: () => openLegalPage(context, 'terms'), child: const Text('Terms of Use')),
-                      ]),
-                    ]))),
-                  ]),
-                  if (_loadingLegal) const Padding(padding: EdgeInsets.only(bottom: 8), child: LinearProgressIndicator()),
+                  const SizedBox(height: 14),
+                  LegalConsentRow(
+                    accepted: _acceptedLegal,
+                    enabled: _legalVersions != null && !_busy,
+                    onChanged: (value) => setState(() {
+                      _acceptedLegal = value;
+                      if (value && _error != null && _error!.contains('Privacy Policy')) {
+                        _error = null;
+                      }
+                    }),
+                    onOpenPrivacy: () => openLegalPage(context, 'privacy-policy'),
+                    onOpenTerms: () => openLegalPage(context, 'terms'),
+                  ),
+                  if (_loadingLegal) const Padding(padding: EdgeInsets.only(top: 6, bottom: 4), child: LinearProgressIndicator()),
                   if (_legalError != null) Row(children: [Expanded(child: Text(_legalError!, style: const TextStyle(color: AppColors.muted, fontSize: 12))), TextButton(onPressed: _loadLegal, child: const Text('Retry'))]),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 12),
                   FilledButton(
-                    onPressed: _busy || !_acceptedLegal || _legalVersions == null ? null : _save,
+                    onPressed: _busy ? null : _save,
                     child: _busy
                         ? const SizedBox(
                             width: 20,
@@ -982,6 +984,89 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
       ),
     ),
   );
+}
+
+class LegalConsentRow extends StatefulWidget {
+  const LegalConsentRow({
+    super.key,
+    required this.accepted,
+    required this.enabled,
+    required this.onChanged,
+    required this.onOpenPrivacy,
+    required this.onOpenTerms,
+  });
+
+  final bool accepted;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+  final VoidCallback onOpenPrivacy;
+  final VoidCallback onOpenTerms;
+
+  @override
+  State<LegalConsentRow> createState() => _LegalConsentRowState();
+}
+
+class _LegalConsentRowState extends State<LegalConsentRow> {
+  late final TapGestureRecognizer _privacyTap = TapGestureRecognizer()
+    ..onTap = () => widget.onOpenPrivacy();
+  late final TapGestureRecognizer _termsTap = TapGestureRecognizer()
+    ..onTap = () => widget.onOpenTerms();
+
+  @override
+  void dispose() {
+    _privacyTap.dispose();
+    _termsTap.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final baseStyle = TextStyle(
+      fontSize: 13,
+      height: 1.4,
+      color: widget.enabled ? AppColors.ink : AppColors.muted,
+    );
+    final linkStyle = baseStyle.copyWith(
+      color: AppColors.blue,
+      fontWeight: FontWeight.w600,
+      decoration: TextDecoration.underline,
+    );
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Checkbox(
+          value: widget.accepted,
+          visualDensity: VisualDensity.compact,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+          activeColor: AppColors.blue,
+          onChanged: widget.enabled ? (value) => widget.onChanged(value ?? false) : null,
+          semanticLabel: 'I accept the Privacy Policy and Terms of Use',
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text.rich(
+            TextSpan(
+              style: baseStyle,
+              children: [
+                const TextSpan(text: 'I accept the '),
+                TextSpan(
+                  text: 'Privacy Policy',
+                  style: linkStyle,
+                  recognizer: _privacyTap,
+                ),
+                const TextSpan(text: ' and '),
+                TextSpan(
+                  text: 'Terms of Use',
+                  style: linkStyle,
+                  recognizer: _termsTap,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _ProfileField extends StatelessWidget {

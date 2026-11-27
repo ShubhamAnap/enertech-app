@@ -1,7 +1,7 @@
 name: enertech_customer
 description: Android-first EnerTech customer platform.
 publish_to: 'none'
-version: 0.1.9+10
+version: 0.1.10+11
 
 environment:
   sdk: ^3.14.0
