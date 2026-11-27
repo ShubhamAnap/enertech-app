@@ -613,19 +613,29 @@ export default function AdminShell({ user, role }: { user: User; role: string })
 
   async function saveKnowledgeArticle(publishAfterSave: boolean) {
     setError(""); setNotice("");
-    const sourceRef = knowledgeForm.source_reference?.trim() || null;
-    if (publishAfterSave && !sourceRef) {
-      setError("Add an approved source reference before publishing this answer.");
+    const title = knowledgeForm.title.trim();
+    const answer = knowledgeForm.answer ?? "";
+    const imageUrls = knowledgeForm.image_urls ?? [];
+    const videoUrls = knowledgeForm.video_urls ?? [];
+    if (title.length < 2) {
+      setError("Enter a question title.");
       return;
     }
+    if (!answer.trim() && !imageUrls.length && !videoUrls.length) {
+      setError("Add an answer, image, or video before saving this FAQ.");
+      return;
+    }
+    const autoSlug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 140);
+    const slug = (knowledgeForm.slug.trim() || autoSlug || `faq-${Date.now()}`).slice(0, 180);
+    const sourceRef = knowledgeForm.source_reference?.trim() || null;
     try {
       const payload = {
-        slug: knowledgeForm.slug.trim(),
-        title: knowledgeForm.title.trim(),
-        category: knowledgeForm.category.trim(),
-        answer: knowledgeForm.answer,
-        image_urls: knowledgeForm.image_urls ?? [],
-        video_urls: knowledgeForm.video_urls ?? [],
+        slug,
+        title,
+        category: knowledgeForm.category.trim() || "General",
+        answer,
+        image_urls: imageUrls,
+        video_urls: videoUrls,
         source_reference: sourceRef,
         sort_order: Number(knowledgeForm.sort_order) || 0,
       };
@@ -2142,9 +2152,9 @@ export default function AdminShell({ user, role }: { user: User; role: string })
               <>
                 <div className="page-heading">
                   <div>
-                    <p className="eyebrow">APPROVED SUPPORT</p>
+                    <p className="eyebrow">CUSTOMER SUPPORT</p>
                     <h1>FAQs & Knowledge</h1>
-                    <p>Source-referenced answers shown in the customer app after publication.</p>
+                    <p>Publish customer FAQs with formatted answers, photos, links, or videos.</p>
                   </div>
                   <button className="btn btn-primary" onClick={() => { setKnowledgeForm(emptyKnowledge); setKnowledgeVideoInput(""); setKnowledgePreview(false); setKnowledgeSlugTouched(false); setEditingKnowledge(null); setShowKnowledgeForm(true); }}>+ Add answer</button>
                 </div>
@@ -2169,7 +2179,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                               <span className="block max-w-xl truncate text-xs text-base-content/60">{article.answer}</span>
                             </td>
                             <td>{article.category}</td>
-                            <td>{article.source_reference ? "Source provided" : "Source required"}</td>
+                            <td className="text-xs text-base-content/70">{article.source_reference || "—"}</td>
                             <td><span className={`badge ${article.is_published ? "badge-success" : "badge-ghost"}`}>{article.is_published ? "Published" : "Draft"}</span></td>
                             <td>
                               <div className="flex gap-1">
@@ -2505,12 +2515,12 @@ export default function AdminShell({ user, role }: { user: User; role: string })
 
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold text-base-content/80">Category *</span>
-                  <input className="input input-bordered input-sm w-full" required minLength={2} maxLength={100} value={knowledgeForm.category} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, category: e.target.value })} />
+                  <span className="text-xs font-semibold text-base-content/80">Category</span>
+                  <input className="input input-bordered input-sm w-full" maxLength={100} placeholder="General" value={knowledgeForm.category} onChange={(e) => setKnowledgeForm({ ...knowledgeForm, category: e.target.value })} />
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <span className="text-xs font-semibold text-base-content/80">URL Slug *</span>
-                  <input className="input input-bordered input-sm w-full font-mono text-xs" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" value={knowledgeForm.slug} onChange={(e) => { setKnowledgeSlugTouched(true); setKnowledgeForm({ ...knowledgeForm, slug: e.target.value }); }} />
+                  <span className="text-xs font-semibold text-base-content/80">URL Slug (auto)</span>
+                  <input className="input input-bordered input-sm w-full font-mono text-xs" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="auto-generated" value={knowledgeForm.slug} onChange={(e) => { setKnowledgeSlugTouched(true); setKnowledgeForm({ ...knowledgeForm, slug: e.target.value }); }} />
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <span className="text-xs font-semibold text-base-content/80">Display Order</span>
@@ -2544,9 +2554,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   <textarea
                     ref={knowledgeAnswerRef}
                     className="textarea w-full min-h-48 rounded-none border-0 text-sm leading-relaxed focus:outline-none"
-                    required
-                    minLength={10}
-                    placeholder={"Write or paste your answer here...\n\nSupports:\n# Section heading\n- Bullet points\n**Bold text**\nhttps://enertechups.com/... (clickable links)"}
+                    placeholder={"Write or paste your answer here (or attach an image/video below)...\n\nSupports:\n# Section heading\n- Bullet points\n**Bold text**\nhttps://enertechups.com/... (clickable links)"}
                     value={knowledgeForm.answer}
                     onChange={(e) => setKnowledgeForm({ ...knowledgeForm, answer: e.target.value })}
                   />
@@ -2637,11 +2645,11 @@ export default function AdminShell({ user, role }: { user: User; role: string })
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <span className="text-xs font-semibold text-base-content/80">Approved Source Reference</span>
+                <span className="text-xs font-semibold text-base-content/80">Source Reference (Optional)</span>
                 <input
                   className="input input-bordered input-sm w-full"
                   maxLength={1000}
-                  placeholder="Document URL, manual section, or internal approval note (required before Publish)"
+                  placeholder="Optional document URL, manual section, or internal note"
                   value={knowledgeForm.source_reference ?? ""}
                   onChange={(e) => setKnowledgeForm({ ...knowledgeForm, source_reference: e.target.value })}
                 />

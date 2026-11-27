@@ -160,18 +160,19 @@ class _FaqArticleScreenState extends State<FaqArticleScreen> {
             style: const TextStyle(color: AppColors.muted, fontSize: 12),
           ),
           const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: (widget.article['answer'] as String? ?? '')
-                    .split('\n')
-                    .map(_answerLine)
-                    .toList(),
+          if ((widget.article['answer'] as String? ?? '').trim().isNotEmpty)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: (widget.article['answer'] as String? ?? '')
+                      .split('\n')
+                      .map(_answerLine)
+                      .toList(),
+                ),
               ),
             ),
-          ),
           for (final url in images) ...[
             const SizedBox(height: 12),
             ClipRRect(

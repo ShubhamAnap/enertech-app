@@ -442,9 +442,9 @@ class CustomerRequestUpdate(BaseModel):
 
 class KnowledgeWrite(BaseModel):
     slug: str = Field(min_length=2, max_length=180, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-    title: str = Field(min_length=3, max_length=220)
-    category: str = Field(default="General", min_length=2, max_length=100)
-    answer: str = Field(min_length=10, max_length=12000)
+    title: str = Field(min_length=2, max_length=220)
+    category: str = Field(default="General", min_length=1, max_length=100)
+    answer: str = Field(default="", max_length=12000)
     image_urls: list[HttpUrl] = Field(default_factory=list, max_length=10)
     video_urls: list[HttpUrl] = Field(default_factory=list, max_length=10)
     source_reference: str | None = Field(default=None, max_length=1000)
@@ -457,12 +457,18 @@ class KnowledgeWrite(BaseModel):
             raise ValueError("FAQ media URLs must use HTTPS")
         return urls
 
+    @model_validator(mode="after")
+    def require_answer_or_media(self) -> "KnowledgeWrite":
+        if not self.answer.strip() and not self.image_urls and not self.video_urls:
+            raise ValueError("Add answer text, an image, or a video")
+        return self
+
 
 class KnowledgePatch(BaseModel):
     slug: str | None = Field(default=None, min_length=2, max_length=180, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-    title: str | None = Field(default=None, min_length=3, max_length=220)
-    category: str | None = Field(default=None, min_length=2, max_length=100)
-    answer: str | None = Field(default=None, min_length=10, max_length=12000)
+    title: str | None = Field(default=None, min_length=2, max_length=220)
+    category: str | None = Field(default=None, min_length=1, max_length=100)
+    answer: str | None = Field(default=None, max_length=12000)
     image_urls: list[HttpUrl] | None = Field(default=None, max_length=10)
     video_urls: list[HttpUrl] | None = Field(default=None, max_length=10)
     source_reference: str | None = Field(default=None, max_length=1000)

@@ -1218,3 +1218,40 @@ def test_faq_media_stays_in_draft_until_published(client: TestClient) -> None:
     assert client.get("/api/v1/knowledge").json()[0]["answer"] == body["answer"]
     assert client.post(f"/api/v1/admin/knowledge/{article_id}/publish").status_code == 200
     assert client.get("/api/v1/knowledge").json()[0]["answer"] == "# Updated care\n- New advice"
+
+
+def test_faq_can_publish_without_source_reference_and_with_short_or_media_only(client: TestClient) -> None:
+    admin = Identity("faq-flex-admin", "faqflex@example.test", "Admin", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: admin
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="faq-flex-admin", role="super_admin", is_active=True))
+        session.commit()
+
+    # Empty text AND no media should still fail cleanly.
+    assert client.post("/api/v1/admin/knowledge", json={
+        "slug": "empty-faq",
+        "title": "Empty",
+        "answer": "",
+    }).status_code == 422
+
+    # Short answer without any source_reference can be created and published directly.
+    short_faq = client.post("/api/v1/admin/knowledge", json={
+        "slug": "serial-location",
+        "title": "Where IS Serial Number",
+        "answer": "Back plate",
+    })
+    assert short_faq.status_code == 201, short_faq.text
+    assert client.post(f"/api/v1/admin/knowledge/{short_faq.json()['id']}/publish").status_code == 200
+
+    # Photo-only FAQ without answer text or source_reference can also be published.
+    media_faq = client.post("/api/v1/admin/knowledge", json={
+        "slug": "wiring-photo",
+        "title": "Wiring Diagram",
+        "answer": "",
+        "image_urls": ["https://cdn.example.test/faq/wiring.png"],
+    })
+    assert media_faq.status_code == 201, media_faq.text
+    assert client.post(f"/api/v1/admin/knowledge/{media_faq.json()['id']}/publish").status_code == 200
+
+    public_slugs = {row["slug"] for row in client.get("/api/v1/knowledge").json()}
+    assert {"serial-location", "wiring-photo"} <= public_slugs

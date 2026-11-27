@@ -115,8 +115,6 @@ def publish_knowledge(
     if article is None:
         raise HTTPException(status_code=404, detail="Knowledge article not found")
     values = KnowledgeWrite.model_validate(_payload(article)).model_dump(mode="json")
-    if not values.get("source_reference"):
-        raise HTTPException(status_code=422, detail="Add an approved source reference before publishing this answer")
     for key, value in values.items():
         setattr(article, key, value)
     article.draft_data = None

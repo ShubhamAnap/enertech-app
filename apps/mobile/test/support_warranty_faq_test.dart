@@ -56,6 +56,29 @@ void main() {
     },
   );
 
+  testWidgets('FaqArticleScreen hides blank answer box for media-only FAQ', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: const FaqArticleScreen(
+          article: {
+            'title': 'Back Panel Sticker',
+            'category': 'General',
+            'answer': '',
+            'image_urls': <String>[],
+            'video_urls': ['https://youtu.be/demo'],
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Back Panel Sticker'), findsOneWidget);
+    expect(find.text('Open video'), findsOneWidget);
+    expect(find.byType(Card), findsOneWidget);
+  });
+
   testWidgets('WarrantyAmcScreen opens Register warranty and AMC forms', (
     tester,
   ) async {
