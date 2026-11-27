@@ -88,7 +88,11 @@ $env:PATH = "$env:JAVA_HOME\bin;$localGitCmd;$env:PATH;$env:WINDIR\System32;$env
 Push-Location $mobileDirectory
 try {
     $pubOption = @()
-    if ($SkipPub) { $pubOption += '--no-pub' }
+    if ($SkipPub) {
+        & $flutter pub get --offline
+        if ($LASTEXITCODE -ne 0) { throw "Offline Flutter dependency setup failed with exit code $LASTEXITCODE." }
+        $pubOption += '--no-pub'
+    }
     & $flutter build apk --release @pubOption @dartDefines
     if ($LASTEXITCODE -ne 0) { throw "Flutter release build failed with exit code $LASTEXITCODE." }
     $outputApk = Join-Path $mobileDirectory "build\app\outputs\flutter-apk\app-release.apk"
