@@ -95,11 +95,11 @@ class CustomerRequestsRepository {
     final footer = utf8.encode('\r\n--$boundary--\r\n');
     final totalLength = header.length + bytes.length + footer.length;
 
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
       final request = await client
           .postUrl(uri)
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 15));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       request.headers.set(
         HttpHeaders.authorizationHeader,
@@ -115,12 +115,12 @@ class CustomerRequestsRepository {
       request.add(bytes);
       request.add(footer);
       final response = await request.close().timeout(
-        const Duration(seconds: 25),
+        const Duration(seconds: 30),
       );
       final text = await response
           .transform(utf8.decoder)
           .join()
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 15));
       final decoded = text.isEmpty ? null : jsonDecode(text);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final message = decoded is Map<String, dynamic>
@@ -260,11 +260,11 @@ class CustomerRequestsRepository {
         ? base
         : base.replace(path: '${base.path}/');
     final uri = root.resolve(path.startsWith('/') ? path.substring(1) : path);
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
       final request =
           await (method == 'POST' ? client.postUrl(uri) : client.getUrl(uri))
-              .timeout(const Duration(seconds: 5));
+              .timeout(const Duration(seconds: 15));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       request.headers.set(
         HttpHeaders.authorizationHeader,
@@ -275,12 +275,12 @@ class CustomerRequestsRepository {
         request.write(jsonEncode(body));
       }
       final response = await request.close().timeout(
-        const Duration(seconds: 5),
+        const Duration(seconds: 15),
       );
       final text = await response
           .transform(utf8.decoder)
           .join()
-          .timeout(const Duration(seconds: 5));
+          .timeout(const Duration(seconds: 15));
       final decoded = text.isEmpty ? null : jsonDecode(text);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final message = decoded is Map<String, dynamic>

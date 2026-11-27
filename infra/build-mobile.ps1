@@ -1,4 +1,4 @@
-param([switch]$SkipPub)
+param([switch]$SkipPub, [switch]$Bundle, [switch]$SkipApk)
 $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $mobileDirectory = Join-Path $projectRoot "apps\mobile"
@@ -93,12 +93,24 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Offline Flutter dependency setup failed with exit code $LASTEXITCODE." }
         $pubOption += '--no-pub'
     }
-    & $flutter build apk --release @pubOption @dartDefines
-    if ($LASTEXITCODE -ne 0) { throw "Flutter release build failed with exit code $LASTEXITCODE." }
-    $outputApk = Join-Path $mobileDirectory "build\app\outputs\flutter-apk\app-release.apk"
-    $targetApk = Join-Path $projectRoot "update.apk"
-    if (-not (Test-Path -LiteralPath $outputApk)) { throw "Release APK was not produced." }
-    Copy-Item -LiteralPath $outputApk -Destination $targetApk -Force
-    Write-Host "Success: Copied release APK to $targetApk"
+    if (-not $SkipApk) {
+        & $flutter build apk --release @pubOption @dartDefines
+        if ($LASTEXITCODE -ne 0) { throw "Flutter release build failed with exit code $LASTEXITCODE." }
+        $outputApk = Join-Path $mobileDirectory "build\app\outputs\flutter-apk\app-release.apk"
+        $targetApk = Join-Path $projectRoot "update.apk"
+        if (-not (Test-Path -LiteralPath $outputApk)) { throw "Release APK was not produced." }
+        Copy-Item -LiteralPath $outputApk -Destination $targetApk -Force
+        Write-Host "Success: Copied release APK to $targetApk"
+    }
+    if ($Bundle) {
+        $symbolsDir = Join-Path $mobileDirectory "build\app\outputs\symbols"
+        & $flutter build appbundle --release @pubOption "--split-debug-info=$symbolsDir" @dartDefines
+        if ($LASTEXITCODE -ne 0) { throw "Flutter appbundle build failed with exit code $LASTEXITCODE." }
+        $outputAab = Join-Path $mobileDirectory "build\app\outputs\bundle\release\app-release.aab"
+        $targetAab = Join-Path $projectRoot "enertech-play-release.aab"
+        if (-not (Test-Path -LiteralPath $outputAab)) { throw "Release AAB was not produced." }
+        Copy-Item -LiteralPath $outputAab -Destination $targetAab -Force
+        Write-Host "Success: Copied signed Play Store AAB to $targetAab"
+    }
 }
 finally { Pop-Location }

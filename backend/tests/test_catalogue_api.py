@@ -1311,3 +1311,52 @@ def test_legal_publication_and_customer_consent_are_versioned(client: TestClient
     stale = {**accepted, "email": "new@example.test"}
     assert client.put("/api/v1/customers/me/with-consent", json=stale).status_code == 409
     assert client.get("/api/v1/customers/me").json() is None
+
+
+def test_delete_account_wipes_pii_deletes_firebase_and_preserves_anonymized_history(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deleted_uids: list[str] = []
+    from app.api import customer_profiles as customer_profiles_api
+    monkeypatch.setattr(customer_profiles_api, "delete_firebase_user", lambda uid: deleted_uids.append(uid))
+
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "legal-editor", "editor@example.test", "Editor", {"email_verified": True}
+    )
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="legal-editor", role="super_admin", is_active=True))
+        session.commit()
+    assert client.delete("/api/v1/customers/me").status_code == 409
+
+    customer = Identity("delete-me-uid", "delete@example.test", "Delete User", {"email_verified": True})
+    app.dependency_overrides[get_current_identity] = lambda: customer
+    assert client.put("/api/v1/customers/me", json={
+        "customer_type": "end_user", "name": "Ravi Kumar", "mobile_number": "+919876543210",
+        "email": "delete@example.test", "location": "Pune, Maharashtra", "company_name": None, "gst_number": None,
+    }).status_code == 200
+    assert client.post("/api/v1/requests/service", json={
+        "product_model": "HTXi-100", "serial_number": "ET-SER-999", "problem_category": "alarm",
+        "description": "Battery alarm on inverter rear display.", "service_location": "Pune",
+    }).status_code == 201
+    assert client.post("/api/v1/requests/warranty", json={
+        "customer_name": "Ravi Kumar", "email": "delete@example.test",
+        "mobile_number": "+919876543210", "purchase_date": "2026-01-15", "serial_number": "ET-SER-999",
+    }).status_code == 201
+
+    res = client.delete("/api/v1/customers/me")
+    assert res.status_code == 200, res.text
+    assert res.json()["preserved_requests"] == 2
+    assert deleted_uids == ["delete-me-uid"]
+    assert client.get("/api/v1/customers/me").json() is None
+
+    with Session(api_router.engine) as session:
+        from sqlalchemy import select
+        from app.models.platform import CustomerRequest
+        reqs = list(session.scalars(select(CustomerRequest)))
+        assert len(reqs) == 2
+        assert all(req.customer_uid.startswith("deleted-") for req in reqs)
+        assert all(req.customer_email.endswith("@deleted.invalid") for req in reqs)
+        warranty_req = next(req for req in reqs if req.kind == "warranty")
+        assert warranty_req.payload["serial_number"] == "ET-SER-999"
+        assert warranty_req.payload["customer_name"] == "Deleted Customer"
+        assert warranty_req.payload["mobile_number"] == "Removed"

@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
+import '../data/customer_auth_service.dart';
 import '../data/customer_profile_repository.dart';
 import '../theme/app_theme.dart';
 import 'legal_page_screen.dart';
@@ -18,6 +21,107 @@ class _AccountScreenState extends State<AccountScreen> {
   final _profiles = CustomerProfileRepository();
 
   bool get _configured => Firebase.apps.isNotEmpty;
+
+  Future<void> _confirmDeleteAccount(BuildContext context) async {
+    final confirmCtrl = TextEditingController();
+    bool deleting = false;
+    String? deleteError;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          final canDelete = confirmCtrl.text.trim().toUpperCase() == 'DELETE' && !deleting;
+          return AlertDialog(
+            title: const Text('Delete account permanently?'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'This removes your EnerTech login, name, email, mobile number, location, and company/GST details.',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Past service, warranty, and AMC serial-number records remain anonymized for equipment support compliance.',
+                    style: TextStyle(fontSize: 12, color: AppColors.muted),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: confirmCtrl,
+                    enabled: !deleting,
+                    textCapitalization: TextCapitalization.characters,
+                    onChanged: (_) => setDialogState(() => deleteError = null),
+                    decoration: const InputDecoration(
+                      labelText: 'Type DELETE to confirm',
+                      hintText: 'DELETE',
+                    ),
+                  ),
+                  if (deleteError != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      deleteError!,
+                      style: const TextStyle(color: Colors.red, fontSize: 12),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: deleting ? null : () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+                onPressed: canDelete
+                    ? () async {
+                        setDialogState(() {
+                          deleting = true;
+                          deleteError = null;
+                        });
+                        try {
+                          await _profiles.deleteAccount();
+                          if (dialogContext.mounted) {
+                            Navigator.of(dialogContext).pop();
+                          }
+                          CustomerProfileRepository.clearCache();
+                          await CustomerAuthService().signOut();
+                        } on HttpException catch (error) {
+                          if (dialogContext.mounted) {
+                            setDialogState(() {
+                              deleting = false;
+                              deleteError = error.message;
+                            });
+                          }
+                        } catch (_) {
+                          if (dialogContext.mounted) {
+                            setDialogState(() {
+                              deleting = false;
+                              deleteError = 'Could not delete your account. Check your connection and try again.';
+                            });
+                          }
+                        }
+                      }
+                    : null,
+                child: deleting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Text('Delete permanently'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    confirmCtrl.dispose();
+  }
 
   void _editProfile(BuildContext context, CustomerProfile profile, User user) {
     final nameCtrl = TextEditingController(text: profile.name);
@@ -504,6 +608,15 @@ class _AccountScreenState extends State<AccountScreen> {
               },
               icon: const Icon(Icons.logout_rounded, size: 18),
               label: const Text('Sign out'),
+            ),
+
+            const SizedBox(height: 10),
+
+            TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
+              onPressed: () => _confirmDeleteAccount(context),
+              icon: const Icon(Icons.delete_outline_rounded, size: 18),
+              label: const Text('Delete Account'),
             ),
           ],
         );

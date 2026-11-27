@@ -244,19 +244,19 @@ class CatalogueRepository {
     final uri = root
         .resolve(path.startsWith('/') ? path.substring(1) : path)
         .replace(queryParameters: queryParameters);
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
       final request = await client
           .getUrl(uri)
-          .timeout(const Duration(seconds: 5));
+          .timeout(const Duration(seconds: 15));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       final response = await request.close().timeout(
-        const Duration(seconds: 5),
+        const Duration(seconds: 15),
       );
       final body = await response
           .transform(utf8.decoder)
           .join()
-          .timeout(const Duration(seconds: 5));
+          .timeout(const Duration(seconds: 15));
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw CatalogueException(
           'Catalogue service returned ${response.statusCode}.',

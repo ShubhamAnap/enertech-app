@@ -194,6 +194,24 @@ class CustomerProfileRepository {
     return savedProfile;
   }
 
+  Future<void> deleteAccount({String? userUid}) async {
+    final user = FirebaseAuth.instance.currentUser;
+    final uid = userUid ?? user?.uid;
+    await _request('DELETE');
+    if (uid != null) _cachedProfiles.remove(uid);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (uid != null) {
+        await prefs.remove('$_prefProfilePrefix$uid');
+        await prefs.remove('$_prefOnboardingPrefix$uid');
+      }
+      await prefs.remove('enertech_cached_categories_v2');
+      await prefs.remove('enertech_cached_products_v2');
+    } catch (e) {
+      debugPrint('Error clearing local preferences after deletion: $e');
+    }
+  }
+
   /// Clears local profile cache on sign out
   static void clearCache() {
     _cachedProfiles.clear();
@@ -211,11 +229,13 @@ class CustomerProfileRepository {
         ? base
         : base.replace(path: '${base.path}/');
     final uri = root.resolve(withConsent ? 'customers/me/with-consent' : 'customers/me');
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
-      final request =
-          await (method == 'PUT' ? client.putUrl(uri) : client.getUrl(uri))
-              .timeout(const Duration(seconds: 4));
+      final request = await switch (method) {
+        'PUT' => client.putUrl(uri),
+        'DELETE' => client.deleteUrl(uri),
+        _ => client.getUrl(uri),
+      }.timeout(const Duration(seconds: 15));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       final token = await user.getIdToken();
       if (token == null || token.isEmpty) {
@@ -229,12 +249,12 @@ class CustomerProfileRepository {
         request.write(jsonEncode(body));
       }
       final response = await request.close().timeout(
-        const Duration(seconds: 4),
+        const Duration(seconds: 15),
       );
       final text = await response
           .transform(utf8.decoder)
           .join()
-          .timeout(const Duration(seconds: 4));
+          .timeout(const Duration(seconds: 15));
       final decoded = text.isEmpty ? null : jsonDecode(text);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final message = decoded is Map<String, dynamic>

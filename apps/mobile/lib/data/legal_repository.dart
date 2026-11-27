@@ -23,12 +23,12 @@ class LegalRepository {
       throw const HttpException('The customer platform API is not configured.');
     }
     final root = base.path.endsWith('/') ? base : base.replace(path: '${base.path}/');
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
-      final request = await client.getUrl(root.resolve('legal/current')).timeout(const Duration(seconds: 5));
+      final request = await client.getUrl(root.resolve('legal/current')).timeout(const Duration(seconds: 15));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      final response = await request.close().timeout(const Duration(seconds: 5));
-      final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 5));
+      final response = await request.close().timeout(const Duration(seconds: 15));
+      final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 15));
       if (response.statusCode != 200) {
         throw const HttpException('Privacy Policy and Terms are not published yet. Please try again later.');
       }
@@ -36,6 +36,28 @@ class LegalRepository {
       final privacy = json['privacy_policy'] as Map<String, dynamic>;
       final terms = json['terms'] as Map<String, dynamic>;
       return LegalVersions(privacyId: privacy['id'] as String, termsId: terms['id'] as String);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<Map<String, dynamic>> loadDocument(String pageSlug) async {
+    final base = Uri.tryParse(CustomerProfileRepository.effectiveBaseUrl);
+    if (base == null || !base.hasScheme || !base.hasAuthority) {
+      throw const HttpException('The customer platform API is not configured.');
+    }
+    final root = base.path.endsWith('/') ? base : base.replace(path: '${base.path}/');
+    final key = pageSlug == 'privacy-policy' ? 'privacy_policy' : 'terms';
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+    try {
+      final request = await client.getUrl(root.resolve('legal/$key')).timeout(const Duration(seconds: 15));
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      final response = await request.close().timeout(const Duration(seconds: 15));
+      final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) {
+        throw const HttpException('This legal document has not been published yet.');
+      }
+      return jsonDecode(body) as Map<String, dynamic>;
     } finally {
       client.close(force: true);
     }

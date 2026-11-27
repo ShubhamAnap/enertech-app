@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../data/legal_repository.dart';
+import '../theme/app_theme.dart';
 
 class LegalPageScreen extends StatefulWidget {
   const LegalPageScreen({super.key, required this.title, required this.page});
@@ -14,24 +15,110 @@ class LegalPageScreen extends StatefulWidget {
 }
 
 class _LegalPageScreenState extends State<LegalPageScreen> {
+  final _legal = LegalRepository();
   late final WebViewController _controller;
   bool _loading = true;
   bool _failed = false;
+  Map<String, dynamic>? _fallbackDocument;
+  String? _fallbackError;
 
   @override
   void initState() {
     super.initState();
     _controller = WebViewController()
       ..setNavigationDelegate(NavigationDelegate(
-        onPageFinished: (_) { if (mounted) setState(() => _loading = false); },
-        onWebResourceError: (error) { if (error.isForMainFrame == true && mounted) setState(() { _loading = false; _failed = true; }); },
+        onPageFinished: (_) {
+          if (mounted) setState(() => _loading = false);
+        },
+        onWebResourceError: (error) {
+          if (error.isForMainFrame == true && mounted) {
+            setState(() {
+              _loading = false;
+              _failed = true;
+            });
+            _loadFallbackDocument();
+          }
+        },
         onNavigationRequest: (request) {
           final target = Uri.tryParse(request.url);
-          return target?.scheme == 'https' && target?.host == LegalRepository.pageUrl(widget.page).host
-              ? NavigationDecision.navigate : NavigationDecision.prevent;
+          return target?.scheme == 'https' &&
+                  target?.host == LegalRepository.pageUrl(widget.page).host
+              ? NavigationDecision.navigate
+              : NavigationDecision.prevent;
         },
       ))
       ..loadRequest(LegalRepository.pageUrl(widget.page));
+  }
+
+  Future<void> _loadFallbackDocument() async {
+    try {
+      final doc = await _legal.loadDocument(widget.page);
+      if (mounted) {
+        setState(() {
+          _fallbackDocument = doc;
+          _fallbackError = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _fallbackError = error.toString().replaceFirst('HttpException: ', '');
+        });
+      }
+    }
+  }
+
+  Widget _buildNativeFallback() {
+    final doc = _fallbackDocument!;
+    final paragraphs = (doc['body'] as String? ?? '')
+        .replaceAll('\r\n', '\n')
+        .split(RegExp(r'\n\s*\n'))
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList(growable: false);
+    final effective = doc['effective_date'] as String?;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+      children: [
+        Text(
+          doc['title'] as String? ?? widget.title,
+          style: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w800,
+            color: AppColors.ink,
+          ),
+        ),
+        if (effective != null && effective.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Effective $effective',
+            style: const TextStyle(fontSize: 12, color: AppColors.muted),
+          ),
+        ],
+        const SizedBox(height: 16),
+        for (final part in paragraphs)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: part.startsWith('#')
+                ? Text(
+                    part.replaceFirst(RegExp(r'^#{1,3}\s+'), ''),
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.navy,
+                    ),
+                  )
+                : Text(
+                    part,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      height: 1.55,
+                      color: AppColors.ink,
+                    ),
+                  ),
+          ),
+      ],
+    );
   }
 
   @override
@@ -52,13 +139,35 @@ class _LegalPageScreenState extends State<LegalPageScreen> {
     body: Stack(children: [
       if (!_failed) WebViewWidget(controller: _controller),
       if (_loading) const Center(child: CircularProgressIndicator()),
-      if (_failed) Center(child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('This page could not be loaded. Check your connection and try again.'),
-          TextButton(onPressed: () { setState(() { _loading = true; _failed = false; }); _controller.loadRequest(LegalRepository.pageUrl(widget.page)); }, child: const Text('Retry')),
-        ]),
-      )),
+      if (_failed && _fallbackDocument != null) _buildNativeFallback(),
+      if (_failed && _fallbackDocument == null)
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _fallbackError ??
+                      'This page could not be loaded. Check your connection and try again.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () {
+                    setState(() {
+                      _loading = true;
+                      _failed = false;
+                      _fallbackError = null;
+                    });
+                    _controller.loadRequest(LegalRepository.pageUrl(widget.page));
+                  },
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        ),
     ]),
   );
 }

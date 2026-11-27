@@ -1,14 +1,15 @@
 from datetime import datetime, timezone
+import hashlib
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.auth import AdminIdentity, Identity, get_current_identity, require_admin_roles
+from app.core.auth import AdminIdentity, Identity, delete_firebase_user, get_current_identity, require_admin_roles
 from app.db.session import get_session
 from app.api.app_content import _published_legal
-from app.models import AuditEvent, CustomerProfile, LegalAcceptance
+from app.models import AdminAccount, AuditEvent, ContactInquiry, CustomerProfile, CustomerRequest, LegalAcceptance
 from app.schemas.cms import CustomerProfilePublic, CustomerProfileWithConsentWrite, CustomerProfileWrite
 
 router = APIRouter(tags=["customer profiles"])
@@ -108,6 +109,92 @@ def _save_profile(
     session.commit()
     session.refresh(profile)
     return _public(profile)
+
+
+@router.delete("/customers/me", response_model=dict[str, object])
+def delete_my_account(
+    identity: Identity = Depends(get_current_identity),
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    _verified_email(identity)
+    active_admin = session.scalar(
+        select(AdminAccount).where(AdminAccount.firebase_uid == identity.uid, AdminAccount.is_active.is_(True))
+    )
+    if active_admin is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Active CMS administrator accounts cannot be deleted from the customer app",
+        )
+
+    anonymized_uid = f"deleted-{hashlib.sha256(identity.uid.encode('utf-8')).hexdigest()[:24]}"
+    anonymized_email = f"{anonymized_uid}@deleted.invalid"
+
+    profiles = list(session.scalars(select(CustomerProfile).where(CustomerProfile.firebase_uid == identity.uid)))
+    for profile in profiles:
+        session.delete(profile)
+
+    requests = list(session.scalars(select(CustomerRequest).where(CustomerRequest.customer_uid == identity.uid)))
+    for req in requests:
+        req.customer_uid = anonymized_uid
+        req.customer_email = anonymized_email
+        payload = dict(req.payload) if isinstance(req.payload, dict) else {}
+        if "customer_name" in payload:
+            payload["customer_name"] = "Deleted Customer"
+        if "email" in payload:
+            payload["email"] = anonymized_email
+        if "mobile_number" in payload:
+            payload["mobile_number"] = "Removed"
+        req.payload = payload
+
+    inquiries = list(session.scalars(select(ContactInquiry).where(ContactInquiry.customer_uid == identity.uid)))
+    for inquiry in inquiries:
+        inquiry.customer_uid = None
+        inquiry.name = "Deleted Customer"
+        inquiry.email = anonymized_email
+        inquiry.phone = "Removed"
+        inquiry.company_name = None
+
+    acceptances = list(session.scalars(select(LegalAcceptance).where(LegalAcceptance.customer_uid == identity.uid)))
+    for acceptance in acceptances:
+        duplicate = session.scalar(
+            select(LegalAcceptance).where(
+                LegalAcceptance.customer_uid == anonymized_uid,
+                LegalAcceptance.privacy_version_id == acceptance.privacy_version_id,
+                LegalAcceptance.terms_version_id == acceptance.terms_version_id,
+            )
+        )
+        if duplicate is not None:
+            session.delete(acceptance)
+        else:
+            acceptance.customer_uid = anonymized_uid
+
+    session.add(
+        AuditEvent(
+            actor_uid=anonymized_uid,
+            action="customer_account.deleted",
+            entity_type="customer_profile",
+            entity_id=anonymized_uid,
+            change_summary={
+                "profiles_deleted": len(profiles),
+                "requests_anonymized": len(requests),
+                "inquiries_anonymized": len(inquiries),
+                "legal_acceptances_anonymized": len(acceptances),
+            },
+        )
+    )
+    session.flush()
+    try:
+        delete_firebase_user(identity.uid)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+    return {
+        "status": "deleted",
+        "preserved_requests": len(requests),
+        "preserved_inquiries": len(inquiries),
+    }
 
 
 @router.get("/admin/customers", response_model=list[CustomerProfilePublic])

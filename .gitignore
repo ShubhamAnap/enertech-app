@@ -17,5 +17,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.apk
+*.aab
 apps/mobile/android/keystore/
 infra/local/release-signing.env

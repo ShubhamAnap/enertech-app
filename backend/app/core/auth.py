@@ -106,3 +106,20 @@ def require_admin_roles(*roles: str):
         return admin
 
     return dependency
+
+
+def delete_firebase_user(uid: str) -> None:
+    """Permanently remove a customer login from Firebase Authentication."""
+    settings = get_settings()
+    if settings.app_env == "local" and not settings.firebase_project_id and not settings.firebase_auth_emulator_host:
+        return
+    app = _firebase_app()
+    try:
+        firebase_auth.delete_user(uid, app=app)
+    except firebase_auth.UserNotFoundError:
+        return
+    except (FirebaseError, ValueError, TypeError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not complete Firebase account deletion. Try again shortly.",
+        ) from error
