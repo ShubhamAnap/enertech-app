@@ -7,9 +7,11 @@ import 'package:material_ui/material_ui.dart';
 
 import '../data/customer_auth_service.dart';
 import '../data/customer_profile_repository.dart';
+import '../data/legal_repository.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_components.dart';
 import 'app_shell.dart';
+import 'legal_page_screen.dart';
 
 class CustomerEntryGate extends StatefulWidget {
   const CustomerEntryGate({super.key});
@@ -419,6 +421,11 @@ class _CustomerAuthPageState extends State<_CustomerAuthPage> {
                         : 'New to EnerTech?  Create an account',
                   ),
                 ),
+                Wrap(alignment: WrapAlignment.center, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                  TextButton(onPressed: () => openLegalPage(context, 'privacy-policy'), child: const Text('Privacy Policy')),
+                  const Text('·'),
+                  TextButton(onPressed: () => openLegalPage(context, 'terms'), child: const Text('Terms of Use')),
+                ]),
               ],
             ),
           ),
@@ -664,10 +671,15 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
   final _location = TextEditingController();
   final _gst = TextEditingController();
   final _profiles = CustomerProfileRepository();
+  final _legal = LegalRepository();
 
   // Role choices: 'end_user', 'reseller', 'epc', 'distributor'
   String _type = 'end_user';
   bool _busy = false;
+  bool _acceptedLegal = false;
+  bool _loadingLegal = true;
+  LegalVersions? _legalVersions;
+  String? _legalError;
   String? _error;
 
   bool get _isBusiness => _type != 'end_user';
@@ -676,6 +688,17 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
   void initState() {
     super.initState();
     _name.text = widget.user.displayName ?? '';
+    _loadLegal();
+  }
+
+  Future<void> _loadLegal() async {
+    if (mounted) setState(() { _loadingLegal = true; _legalError = null; _acceptedLegal = false; });
+    try {
+      final versions = await _legal.loadCurrent();
+      if (mounted) setState(() { _legalVersions = versions; _loadingLegal = false; });
+    } catch (_) {
+      if (mounted) setState(() { _legalVersions = null; _loadingLegal = false; _legalError = 'Privacy Policy and Terms are unavailable. Please try again.'; });
+    }
   }
 
   @override
@@ -714,6 +737,10 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    if (!_acceptedLegal || _legalVersions == null) {
+      setState(() => _error = 'Read and accept the Privacy Policy and Terms of Use to continue.');
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -727,10 +754,11 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
         'location': _location.text.trim(),
         'company_name': _isBusiness ? _company.text.trim() : null,
         'gst_number': _isBusiness ? _gst.text.trim().toUpperCase() : null,
-      }, userUid: widget.user.uid);
+      }, userUid: widget.user.uid, privacyVersionId: _legalVersions!.privacyId, termsVersionId: _legalVersions!.termsId);
       widget.onSaved();
     } on HttpException catch (error) {
       if (mounted) setState(() => _error = error.message);
+      if (error.message.contains('legal pages changed')) await _loadLegal();
     } catch (_) {
       if (mounted)
         setState(
@@ -907,9 +935,27 @@ class _CustomerOnboardingPageState extends State<_CustomerOnboardingPage> {
                   if (_error != null)
                     _InlineMessage(text: _error!, error: true),
 
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Checkbox(
+                      value: _acceptedLegal,
+                      onChanged: _legalVersions == null || _busy ? null : (value) => setState(() => _acceptedLegal = value ?? false),
+                      semanticLabel: 'I agree to the Privacy Policy and Terms of Use',
+                    ),
+                    Expanded(child: Padding(padding: const EdgeInsets.only(top: 4), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('I have read and agree to the', style: TextStyle(fontSize: 13, color: AppColors.ink)),
+                      Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
+                        TextButton(onPressed: () => openLegalPage(context, 'privacy-policy'), child: const Text('Privacy Policy')),
+                        const Text('and', style: TextStyle(fontSize: 13)),
+                        TextButton(onPressed: () => openLegalPage(context, 'terms'), child: const Text('Terms of Use')),
+                      ]),
+                    ]))),
+                  ]),
+                  if (_loadingLegal) const Padding(padding: EdgeInsets.only(bottom: 8), child: LinearProgressIndicator()),
+                  if (_legalError != null) Row(children: [Expanded(child: Text(_legalError!, style: const TextStyle(color: AppColors.muted, fontSize: 12))), TextButton(onPressed: _loadLegal, child: const Text('Retry'))]),
+                  const SizedBox(height: 10),
                   FilledButton(
-                    onPressed: _busy ? null : _save,
+                    onPressed: _busy || !_acceptedLegal || _legalVersions == null ? null : _save,
                     child: _busy
                         ? const SizedBox(
                             width: 20,

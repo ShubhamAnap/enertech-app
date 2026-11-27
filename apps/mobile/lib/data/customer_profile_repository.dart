@@ -154,6 +154,8 @@ class CustomerProfileRepository {
   Future<CustomerProfile> save(
     Map<String, Object?> values, {
     String? userUid,
+    String? privacyVersionId,
+    String? termsVersionId,
   }) async {
     final user = FirebaseAuth.instance.currentUser;
     final uid =
@@ -163,7 +165,13 @@ class CustomerProfileRepository {
 
     // The backend is authoritative: never tell a new customer their profile was
     // saved if the API rejected it or could not persist it.
-    final value = await _request('PUT', body: values);
+    final withConsent = privacyVersionId != null && termsVersionId != null;
+    final value = await _request('PUT', body: withConsent ? {
+      ...values,
+      'privacy_version_id': privacyVersionId,
+      'terms_version_id': termsVersionId,
+      'accepted': true,
+    } : values, withConsent: withConsent);
     if (value is! Map<String, dynamic>) {
       throw const HttpException(
         'The customer platform returned an invalid profile response.',
@@ -191,7 +199,7 @@ class CustomerProfileRepository {
     _cachedProfiles.clear();
   }
 
-  Future<dynamic> _request(String method, {Map<String, Object?>? body}) async {
+  Future<dynamic> _request(String method, {Map<String, Object?>? body, bool withConsent = false}) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null)
       throw const HttpException('Sign in to access your customer profile.');
@@ -202,7 +210,7 @@ class CustomerProfileRepository {
     final root = base.path.endsWith('/')
         ? base
         : base.replace(path: '${base.path}/');
-    final uri = root.resolve('customers/me');
+    final uri = root.resolve(withConsent ? 'customers/me/with-consent' : 'customers/me');
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
     try {
       final request =

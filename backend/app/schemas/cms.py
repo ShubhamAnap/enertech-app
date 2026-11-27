@@ -367,6 +367,21 @@ class ContentEnvelope(BaseModel):
     updated_at: str | None
 
 
+class LegalContent(BaseModel):
+    body: str = Field(default="", max_length=100000)
+    effective_date: date | None = None
+
+
+class LegalDocumentPublic(BaseModel):
+    id: UUID
+    key: Literal["privacy_policy", "terms"]
+    title: str
+    body: str
+    effective_date: date
+    version: int
+    published_at: str
+
+
 class ServiceRequestWrite(BaseModel):
     product_model: str = Field(min_length=1, max_length=120)
     serial_number: str | None = Field(default=None, max_length=120)
@@ -517,6 +532,7 @@ class CustomerProfileWrite(BaseModel):
     company_name: str | None = Field(default=None, max_length=220)
     gst_number: str | None = Field(default=None, max_length=32)
 
+
     @field_validator("email")
     @classmethod
     def valid_email(cls, value: str) -> str:
@@ -568,6 +584,12 @@ class CustomerProfileWrite(BaseModel):
         if info.data.get("customer_type") != "end_user" and not value:
             raise ValueError("GST number is required for reseller, EPC, and distributor accounts")
         return value
+
+
+class CustomerProfileWithConsentWrite(CustomerProfileWrite):
+    privacy_version_id: UUID
+    terms_version_id: UUID
+    accepted: Literal[True]
 
 
 class CustomerProfilePublic(BaseModel):

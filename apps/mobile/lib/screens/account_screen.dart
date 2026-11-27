@@ -5,6 +5,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../data/customer_profile_repository.dart';
 import '../theme/app_theme.dart';
+import 'legal_page_screen.dart';
 
 class AccountScreen extends StatefulWidget {
   const AccountScreen({super.key});
@@ -465,6 +466,12 @@ class _AccountScreenState extends State<AccountScreen> {
                   : null,
             ),
 
+            const SizedBox(height: 20),
+
+            const Text('LEGAL', style: TextStyle(color: AppColors.muted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+            const SizedBox(height: 8),
+            _AccountAction(icon: Icons.privacy_tip_outlined, title: 'Privacy Policy', detail: 'View the current policy', onTap: () => openLegalPage(context, 'privacy-policy')),
+            _AccountAction(icon: Icons.description_outlined, title: 'Terms of Use', detail: 'View the current terms', onTap: () => openLegalPage(context, 'terms')),
             const SizedBox(height: 20),
 
             // Edit Profile Button

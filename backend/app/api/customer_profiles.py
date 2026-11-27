@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -6,8 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import AdminIdentity, Identity, get_current_identity, require_admin_roles
 from app.db.session import get_session
-from app.models import AuditEvent, CustomerProfile
-from app.schemas.cms import CustomerProfilePublic, CustomerProfileWrite
+from app.api.app_content import _published_legal
+from app.models import AuditEvent, CustomerProfile, LegalAcceptance
+from app.schemas.cms import CustomerProfilePublic, CustomerProfileWithConsentWrite, CustomerProfileWrite
 
 router = APIRouter(tags=["customer profiles"])
 
@@ -43,9 +45,31 @@ def save_my_profile(
     identity: Identity = Depends(get_current_identity),
     session: Session = Depends(get_session),
 ) -> CustomerProfilePublic:
+    return _save_profile(body.model_dump(mode="json"), identity, session)
+
+
+@router.put("/customers/me/with-consent", response_model=CustomerProfilePublic)
+def save_my_profile_with_consent(
+    body: CustomerProfileWithConsentWrite,
+    identity: Identity = Depends(get_current_identity),
+    session: Session = Depends(get_session),
+) -> CustomerProfilePublic:
+    privacy = _published_legal("privacy_policy", session)
+    terms = _published_legal("terms", session)
+    if body.privacy_version_id != privacy.id or body.terms_version_id != terms.id:
+        raise HTTPException(status_code=409, detail="The legal pages changed. Review the current versions and accept again.")
+    values = body.model_dump(mode="json", exclude={"privacy_version_id", "terms_version_id", "accepted"})
+    return _save_profile(values, identity, session, (privacy.id, terms.id))
+
+
+def _save_profile(
+    values: dict[str, object],
+    identity: Identity,
+    session: Session,
+    consent_versions: tuple[UUID, UUID] | None = None,
+) -> CustomerProfilePublic:
     auth_email = _verified_email(identity)
-    values = body.model_dump(mode="json")
-    if values["email"].lower() != auth_email:
+    if str(values["email"]).lower() != auth_email:
         raise HTTPException(status_code=422, detail="Use the verified email address for your signed-in account")
     business = values["customer_type"] != "end_user"
     if business and (not values["company_name"] or not values["gst_number"]):
@@ -62,6 +86,25 @@ def save_my_profile(
         profile.updated_at = datetime.now(timezone.utc)
         action = "customer_profile.updated"
     session.add(AuditEvent(actor_uid=identity.uid, action=action, entity_type="customer_profile", entity_id=identity.uid, change_summary={"changed_fields": changed}))
+    if consent_versions is not None:
+        privacy_id, terms_id = consent_versions
+        existing = session.scalar(select(LegalAcceptance).where(
+            LegalAcceptance.customer_uid == identity.uid,
+            LegalAcceptance.privacy_version_id == privacy_id,
+            LegalAcceptance.terms_version_id == terms_id,
+        ))
+        if existing is None:
+            session.add(LegalAcceptance(
+                customer_uid=identity.uid,
+                privacy_version_id=privacy_id,
+                terms_version_id=terms_id,
+                accepted_at=datetime.now(timezone.utc),
+            ))
+            session.add(AuditEvent(
+                actor_uid=identity.uid, action="customer_legal.accepted",
+                entity_type="customer_profile", entity_id=identity.uid,
+                change_summary={"privacy_version_id": str(privacy_id), "terms_version_id": str(terms_id)},
+            ))
     session.commit()
     session.refresh(profile)
     return _public(profile)

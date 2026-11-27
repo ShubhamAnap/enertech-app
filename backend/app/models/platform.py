@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Uuid, func
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -33,6 +33,29 @@ class AppConfig(Base):
     published_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class LegalDocumentVersion(Base):
+    __tablename__ = "legal_document_versions"
+    __table_args__ = (UniqueConstraint("key", "version", name="uq_legal_document_key_version"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    key: Mapped[str] = mapped_column(String(40), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    body: Mapped[str] = mapped_column(String(100000))
+    effective_date: Mapped[date] = mapped_column(Date)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LegalAcceptance(Base):
+    __tablename__ = "legal_acceptances"
+    __table_args__ = (UniqueConstraint("customer_uid", "privacy_version_id", "terms_version_id", name="uq_customer_legal_versions"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    customer_uid: Mapped[str] = mapped_column(String(128), index=True)
+    privacy_version_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("legal_document_versions.id"))
+    terms_version_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("legal_document_versions.id"))
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AuditEvent(Base):

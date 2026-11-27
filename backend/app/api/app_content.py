@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from app.core.auth import AdminIdentity, require_admin_roles
 from app.core.config import get_settings
 from app.db.session import get_session
-from app.models import AppConfig, AuditEvent, Product, ProductCategory
-from app.schemas.cms import BrandContent, ChatContent, ContactContent, ContentEnvelope, HomeContent, SolutionFinderContent
+from app.models import AppConfig, AuditEvent, LegalDocumentVersion, Product, ProductCategory
+from app.schemas.cms import BrandContent, ChatContent, ContactContent, ContentEnvelope, HomeContent, LegalContent, LegalDocumentPublic, SolutionFinderContent
 
 router = APIRouter(tags=["app content"])
 CONTENT_SCHEMAS = {
@@ -18,7 +18,10 @@ CONTENT_SCHEMAS = {
     "solution_finder": SolutionFinderContent,
     "chat": ChatContent,
     "brand": BrandContent,
+    "privacy_policy": LegalContent,
+    "terms": LegalContent,
 }
+LEGAL_TITLES = {"privacy_policy": "Privacy Policy", "terms": "Terms of Use"}
 CONTENT_ROLES = ("content_editor", "admin", "super_admin")
 
 
@@ -49,7 +52,7 @@ def _as_envelope(record: AppConfig | None, key: str) -> ContentEnvelope:
 @router.get("/app/config")
 def public_app_config(session: Session = Depends(get_session)) -> dict[str, object]:
     records = session.scalars(select(AppConfig).where(AppConfig.published_payload.is_not(None)))
-    result = {record.key: record.published_payload for record in records if record.key in CONTENT_SCHEMAS}
+    result = {record.key: record.published_payload for record in records if record.key in CONTENT_SCHEMAS and record.key not in LEGAL_TITLES}
     home = result.get("home")
     if isinstance(home, dict):
         visible_collection_ids = {
@@ -83,6 +86,35 @@ def public_app_config(session: Session = Depends(get_session)) -> dict[str, obje
             })
         result["chat"] = public_chat
     return result
+
+
+def _published_legal(key: str, session: Session) -> LegalDocumentPublic:
+    if key not in LEGAL_TITLES:
+        raise HTTPException(status_code=404, detail="Legal page not found")
+    config = session.scalar(select(AppConfig).where(AppConfig.key == key))
+    if config is None or config.published_payload is None:
+        raise HTTPException(status_code=404, detail="This legal page has not been published")
+    version = session.scalar(select(LegalDocumentVersion).where(
+        LegalDocumentVersion.key == key,
+        LegalDocumentVersion.version == config.published_revision,
+    ))
+    if version is None:
+        raise HTTPException(status_code=503, detail="Published legal page is unavailable")
+    return LegalDocumentPublic(
+        id=version.id, key=key, title=LEGAL_TITLES[key], body=version.body,
+        effective_date=version.effective_date, version=version.version,
+        published_at=version.published_at.isoformat(),
+    )
+
+
+@router.get("/legal/current", response_model=dict[str, LegalDocumentPublic])
+def public_current_legal(session: Session = Depends(get_session)) -> dict[str, LegalDocumentPublic]:
+    return {key: _published_legal(key, session) for key in LEGAL_TITLES}
+
+
+@router.get("/legal/{key}", response_model=LegalDocumentPublic)
+def public_legal_page(key: str, session: Session = Depends(get_session)) -> LegalDocumentPublic:
+    return _published_legal(key, session)
 
 
 @router.get("/admin/app-config/{key}", response_model=ContentEnvelope)
@@ -143,6 +175,13 @@ def publish_app_config(
     except Exception as error:
         raise HTTPException(status_code=422, detail="App content did not pass validation") from error
 
+    if key in LEGAL_TITLES:
+        legal = LegalContent.model_validate(validated)
+        if len(legal.body.strip()) < 50 or legal.effective_date is None:
+            raise HTTPException(status_code=422, detail="Add approved legal text and an effective date before publishing")
+        if legal.effective_date > date.today():
+            raise HTTPException(status_code=422, detail="Effective date cannot be in the future")
+
     if key == "home":
         home = HomeContent.model_validate(validated)
         for category_id in home.featured_category_ids:
@@ -184,6 +223,17 @@ def publish_app_config(
     record.published_revision = record.draft_revision
     record.published_by = admin.uid
     record.published_at = datetime.now(timezone.utc)
+    if key in LEGAL_TITLES:
+        existing_version = session.scalar(select(LegalDocumentVersion).where(
+            LegalDocumentVersion.key == key,
+            LegalDocumentVersion.version == record.draft_revision,
+        ))
+        if existing_version is None:
+            session.add(LegalDocumentVersion(
+                key=key, version=record.draft_revision, body=validated["body"],
+                effective_date=date.fromisoformat(validated["effective_date"]),
+                published_at=record.published_at,
+            ))
     session.add(AuditEvent(
         actor_uid=admin.uid,
         action="app_content.published",
@@ -203,6 +253,8 @@ def unpublish_app_config(
     admin: AdminIdentity = Depends(require_admin_roles("admin", "super_admin")),
 ) -> ContentEnvelope:
     _schema_for(key)
+    if key in LEGAL_TITLES:
+        raise HTTPException(status_code=409, detail="Publish a replacement legal page instead of removing the public page")
     record = session.scalar(select(AppConfig).where(AppConfig.key == key))
     if record is None:
         raise HTTPException(status_code=404, detail="App content not found")

@@ -19,7 +19,7 @@ from app.core.auth import Identity, get_current_identity
 from app.db.base import Base
 from app.db.session import get_session
 from app.main import app
-from app.models import AdminAccount, AppConfig, ContactInquiry, CustomerProfile, CustomerRequest, Product, ProductCategory
+from app.models import AdminAccount, AppConfig, ContactInquiry, CustomerProfile, CustomerRequest, LegalAcceptance, LegalDocumentVersion, Product, ProductCategory
 from app.core.auth import AdminIdentity
 
 
@@ -1255,3 +1255,59 @@ def test_faq_can_publish_without_source_reference_and_with_short_or_media_only(c
 
     public_slugs = {row["slug"] for row in client.get("/api/v1/knowledge").json()}
     assert {"serial-location", "wiring-photo"} <= public_slugs
+def test_legal_publication_and_customer_consent_are_versioned(client: TestClient) -> None:
+    assert client.get("/api/v1/legal/privacy_policy").status_code == 404
+    with Session(api_router.engine) as session:
+        session.add(AdminAccount(firebase_uid="legal-editor", role="super_admin", is_active=True))
+        session.commit()
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "legal-editor", "editor@example.test", "Editor", {"email_verified": True}
+    )
+
+    documents = {
+        "privacy_policy": "# Privacy Policy\n\nWe describe collection and use of customer profile and support request details here.",
+        "terms": "# Terms of Use\n\nThese terms explain customer account access and product support request conditions.",
+    }
+    for key, body in documents.items():
+        path = f"/api/v1/admin/app-config/{key}"
+        assert client.put(path, json={"body": body, "effective_date": "2026-11-01"}).status_code == 200
+        assert client.get(f"/api/v1/legal/{key}").status_code == 404
+        assert client.post(f"{path}/publish").status_code == 200
+        assert client.post(f"{path}/unpublish").status_code == 409
+
+    current = client.get("/api/v1/legal/current")
+    assert current.status_code == 200
+    versions = current.json()
+    assert versions["privacy_policy"]["body"] == documents["privacy_policy"]
+    assert versions["terms"]["body"] == documents["terms"]
+    assert "privacy_policy" not in client.get("/api/v1/app/config").json()
+
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "legal-customer", "customer@example.test", "Customer", {"email_verified": True}
+    )
+    profile = {
+        "customer_type": "end_user", "name": "Legal Customer", "mobile_number": "+919876543210",
+        "email": "customer@example.test", "location": "Pune", "company_name": None, "gst_number": None,
+    }
+    accepted = {**profile, "privacy_version_id": versions["privacy_policy"]["id"],
+                "terms_version_id": versions["terms"]["id"], "accepted": True}
+    assert client.put("/api/v1/customers/me/with-consent", json={**accepted, "accepted": False}).status_code == 422
+    assert client.get("/api/v1/customers/me").json() is None
+    assert client.put("/api/v1/customers/me/with-consent", json=accepted).status_code == 200
+    assert client.put("/api/v1/customers/me/with-consent", json=accepted).status_code == 200
+    with Session(api_router.engine) as session:
+        assert session.query(LegalAcceptance).count() == 1
+        assert session.query(LegalDocumentVersion).count() == 2
+
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "legal-editor", "editor@example.test", "Editor", {"email_verified": True}
+    )
+    path = "/api/v1/admin/app-config/privacy_policy"
+    assert client.put(path, json={"body": documents["privacy_policy"] + " Updated.", "effective_date": "2026-11-01"}).status_code == 200
+    assert client.post(f"{path}/publish").status_code == 200
+    app.dependency_overrides[get_current_identity] = lambda: Identity(
+        "new-customer", "new@example.test", "New Customer", {"email_verified": True}
+    )
+    stale = {**accepted, "email": "new@example.test"}
+    assert client.put("/api/v1/customers/me/with-consent", json=stale).status_code == 409
+    assert client.get("/api/v1/customers/me").json() is None

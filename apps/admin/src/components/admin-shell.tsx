@@ -8,7 +8,7 @@ import { getFirebaseAuth } from "@/lib/firebase";
 import { AssignProductsModal, CollectionCataloguePdfModal, CreateCollectionModal, ProductCategoryOverrideModal, ProductPdfOverrideModal } from "./catalogue-modals";
 
 type Section = "overview" | "products" | "categories" | "app_content" | "wordpress" | "service" | "quotes" | "warranty" | "amc" | "contact_inquiries" | "knowledge" | "customers" | "admins" | "audit";
-type AppContentTab = "home" | "contacts" | "solution_finder" | "chat" | "brand";
+type AppContentTab = "home" | "contacts" | "solution_finder" | "chat" | "brand" | "privacy_policy" | "terms";
 type WordPressStatus = { configured: boolean; authenticated: boolean; documents_configured: boolean; site: string | null; products_path: string | null; categories_path: string | null; store_api_path: string | null; message: string };
 type WordPressSyncSummary = {
   source?: string;
@@ -36,6 +36,8 @@ const appContentTabs: { key: AppContentTab; title: string }[] = [
   { key: "solution_finder", title: "Solution Finder" },
   { key: "chat", title: "Live chat" },
   { key: "brand", title: "Brand identity" },
+  { key: "privacy_policy", title: "Privacy Policy" },
+  { key: "terms", title: "Terms of Use" },
 ];
 const emptyProduct = { category_id: "", category_ids: [] as string[], slug: "", name: "", model_code: "", summary: "", description: "", applications: [] as string[], features: [] as string[], specifications: {} as Record<string, unknown>, image_url: null as string | null, gallery_images: [] as string[], price_minor: null as number | null, currency_code: "INR", currency_minor_unit: 2, stock_status: "unknown" as Product["stock_status"], stock_quantity: null as number | null, documents: [] as Product["documents"], source_reference: "", wordpress_source_id: null as string | null, wordpress_source_url: null as string | null };
 const emptyKnowledge = { slug: "", title: "", category: "General", answer: "", image_urls: [] as string[], video_urls: [] as string[], source_reference: "", sort_order: 0 };
@@ -1991,12 +1993,12 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                   <div>
                     <p className="eyebrow">CUSTOMER MOBILE APP</p>
                     <h1>App Content &amp; Configuration</h1>
-                    <p>Configure Home, contacts, Solution Finder, chat, and brand logo; publish updates directly to the mobile app.</p>
+                    <p>Configure app content and manage the public Privacy Policy and Terms of Use pages.</p>
                   </div>
                   <div className="page-actions">
                     <button className="btn btn-outline btn-sm" onClick={() => void saveContent()}>Save draft</button>
-                    <button className="btn btn-primary btn-sm" disabled={!content || content.draft_revision === 0} onClick={() => void publish(`/admin/app-config/${appContentTab}/publish`)}>Publish to App</button>
-                    {(role === "admin" || role === "super_admin") && content?.published_payload && <button className="btn btn-outline btn-error btn-sm" onClick={() => void unpublish(`/admin/app-config/${appContentTab}/unpublish`)}>Unpublish</button>}
+                    <button className="btn btn-primary btn-sm" disabled={!content || content.draft_revision === 0} onClick={() => void publish(`/admin/app-config/${appContentTab}/publish`)}>{appContentTab === "privacy_policy" || appContentTab === "terms" ? "Publish page" : "Publish to App"}</button>
+                    {(role === "admin" || role === "super_admin") && content?.published_payload && appContentTab !== "privacy_policy" && appContentTab !== "terms" && <button className="btn btn-outline btn-error btn-sm" onClick={() => void unpublish(`/admin/app-config/${appContentTab}/unpublish`)}>Unpublish</button>}
                   </div>
                 </div>
 
@@ -2021,11 +2023,14 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                         <header className="panel-head">
                           <div>
                             <h2>Edit {appContentTabs.find((t) => t.key === appContentTab)?.title}</h2>
-                            <p>Save draft first, then click Publish to App.</p>
+                            <p>{appContentTab === "privacy_policy" || appContentTab === "terms" ? "Enter your approved wording and effective date, save a draft, then publish the public page." : "Save draft first, then click Publish to App."}</p>
                           </div>
                         </header>
+                        {(appContentTab === "privacy_policy" || appContentTab === "terms") && <div className="px-4 pt-4"><a className="link link-primary text-sm" href={appContentTab === "privacy_policy" ? "/privacy-policy" : "/terms"} target="_blank" rel="noreferrer">Open public page ↗</a><p className="text-xs text-base-content/65">The public page shows only the published version. Draft edits stay private.</p></div>}
                         <div className="grid min-w-0 gap-4 p-4 sm:grid-cols-2">
-                          {Object.entries(contentDraft).map(([key, value]) => (
+                          {Object.entries(contentDraft).map(([key, value]) => (appContentTab === "privacy_policy" || appContentTab === "terms") ? (
+                            key === "body" ? <label key={key} className="form-control gap-2 sm:col-span-2"><span className="label-text font-semibold">Approved text</span><textarea className="textarea textarea-bordered min-h-96 w-full font-sans leading-relaxed" value={textValue(value)} onChange={(event) => setContentDraft((current) => ({ ...current, body: event.target.value }))} placeholder="Paste or type the approved legal text here. Use a separate line for each heading or paragraph." /></label> : <label key={key} className="form-control gap-2"><span className="label-text font-semibold">Effective date</span><input className="input input-bordered" type="date" value={textValue(value)} onChange={(event) => setContentDraft((current) => ({ ...current, effective_date: event.target.value || null }))} /></label>
+                          ) : (
                             <ContentField key={key} field={key} value={value} categories={categories} products={products} onChange={(next) => setContentDraft((current) => ({ ...current, [key]: next }))} />
                           ))}
                           {appContentTab === "home" && (productHasMore || categoryHasMore) && (
@@ -2036,6 +2041,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                           )}
                         </div>
                       </article>
+                      {(appContentTab === "privacy_policy" || appContentTab === "terms") && <details className="card panel p-4"><summary className="cursor-pointer font-semibold">Preview draft text</summary><div className="mt-4 space-y-3 whitespace-pre-wrap break-words text-sm leading-relaxed"><h3 className="text-xl font-bold text-primary">{appContentTab === "privacy_policy" ? "Privacy Policy" : "Terms of Use"}</h3><p className="text-base-content/65">Effective {textValue(contentDraft.effective_date) || "date not set"}</p><p>{textValue(contentDraft.body) || "No draft text yet."}</p></div></details>}
                       <ContentComparison defaultOpen={false} draft={contentDraft} published={content?.published_payload ?? null} />
                     </div>
                     <aside className="card panel h-fit xl:sticky xl:top-20">
@@ -2055,7 +2061,7 @@ export default function AdminShell({ user, role }: { user: User; role: string })
                           Last update: <strong>{content?.updated_at ? new Date(content.updated_at).toLocaleString() : "Not saved"}</strong>
                         </div>
                         <div className={content?.published_payload ? "alert alert-success py-2 text-xs" : "alert alert-info py-2 text-xs"}>
-                          {content?.published_payload ? "Published version is active in the mobile app." : "Not published yet; app uses local defaults."}
+                          {content?.published_payload ? "Published version is active in the mobile app." : (appContentTab === "privacy_policy" || appContentTab === "terms") ? "Not published yet; public page is unavailable." : "Not published yet; app uses local defaults."}
                         </div>
                       </div>
                     </aside>

@@ -1,3 +1,4 @@
+param([switch]$SkipPub)
 $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $mobileDirectory = Join-Path $projectRoot "apps\mobile"
@@ -86,7 +87,9 @@ $localGitCmd = Join-Path $projectRoot ".dev\git\cmd"
 $env:PATH = "$env:JAVA_HOME\bin;$localGitCmd;$env:PATH;$env:WINDIR\System32;$env:WINDIR;$env:WINDIR\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd"
 Push-Location $mobileDirectory
 try {
-    & $flutter build apk --release @dartDefines
+    $pubOption = @()
+    if ($SkipPub) { $pubOption += '--no-pub' }
+    & $flutter build apk --release @pubOption @dartDefines
     if ($LASTEXITCODE -ne 0) { throw "Flutter release build failed with exit code $LASTEXITCODE." }
     $outputApk = Join-Path $mobileDirectory "build\app\outputs\flutter-apk\app-release.apk"
     $targetApk = Join-Path $projectRoot "update.apk"
